@@ -11,7 +11,7 @@ PC_E_DIM   = 7 # the size of the excitatory kernel
 PC_I_DIM   = 5 # the size of the inhibitory kernel
 PC_GLOBAL_INHIB = 0.00002 # value of global inhibition
 PC_CELL_X_SIZE = 1
-PC_C_SIZE_TH = 2 *pi / PC_DIM_TH
+PC_C_SIZE_TH = 2.0 *pi / PC_DIM_TH
 
 class PoseCellNetwork:
 
@@ -26,7 +26,7 @@ class PoseCellNetwork:
 
     self.global_inhibition = PC_GLOBAL_INHIB
     self.pc_vtrans_scale = PC_CELL_X_SIZE
-    self.pc_vrot_scale = PC_C_SIZE_TH
+    self.pc_vrot_scale = 2.0*pi/shape[2]#PC_C_SIZE_TH
 
   # builds a 3D gaussian filter kernel with lengths of 'dim'
   def build_kernel( self, dim, sigma, order=3 ):
@@ -166,7 +166,7 @@ class PoseCellNetwork:
   def get_pc_max( self ):
     (x,y,th) = unravel_index(self.posecells.argmax(), self.posecells.shape)
     return (x,y,th)
-    #pass # - just copy it from ratslam-python for now
+    #pass # TODO - just copy it from ratslam-python for now
 
   def inject( self, energy, loc ): # loc is of the form [ x, y, z ]
 
