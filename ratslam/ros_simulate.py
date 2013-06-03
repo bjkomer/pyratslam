@@ -11,7 +11,7 @@ from geometry_msgs.msg import Twist, TwistWithCovariance
 from nav_msgs.msg import Odometry
 from collections import deque
 
-POSE_SIZE = (50,50,10)
+POSE_SIZE = (50,50,20)
 
 def main():
 
@@ -21,7 +21,6 @@ def main():
   ax = fig.add_subplot(111, projection='3d')
   midpoint = (math.floor(POSE_SIZE[0]/2),math.floor(POSE_SIZE[1]/2),math.floor(POSE_SIZE[2]/2))
   pcn.inject( 1, midpoint )
-  pcn.update((1,0))
   ax.set_xlim3d([0, POSE_SIZE[0]])
   ax.set_ylim3d([0, POSE_SIZE[1]])
   ax.set_zlim3d([0, POSE_SIZE[2]])
@@ -40,22 +39,19 @@ def main():
   
   
   def callback(data):
-    twist = data.twist.twist #is this right??
-    twist_data.append(twist)
+    twist = data.twist.twist
+    # If there is barely any motion, don't bother flooding the queue with it
+    if abs(twist.linear.x) > .01 or abs(twist.angular.z) > 0.01:
+      twist_data.append(twist)
 
   rospy.init_node('posecells', anonymous=True)
   sub = rospy.Subscriber('navbot/odom',Odometry,callback)
-  #rospy.spin()
  
   while not rospy.is_shutdown():
     if len(twist_data) > 0:
-      #print(pcn.get_pc_max())
       twist = twist_data.popleft()
       vtrans = twist.linear.x
       vrot = twist.angular.z
-      #print ( data )
-      #print ( twist )
-      #print ( vtrans, vrot )
       pcn.update((vtrans,vrot))
       pc = pcn.posecells
       pc_index = nonzero(pc>.002)
@@ -66,7 +62,5 @@ def main():
       ax.set_zlim3d([0, POSE_SIZE[2]])
       plt.pause(.0001)
       
-
-# TODO: maybe put this elsewhere
 if __name__ == "__main__":
   main()
