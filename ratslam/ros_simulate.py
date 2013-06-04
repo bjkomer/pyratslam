@@ -60,7 +60,7 @@ def main():
       ax.set_xlim3d([0, POSE_SIZE[0]])
       ax.set_ylim3d([0, POSE_SIZE[1]])
       ax.set_zlim3d([0, POSE_SIZE[2]])
-      plt.pause(.0001)
+      plt.pause(.0001) # This is needed for the display to update
       
 if __name__ == "__main__":
   main()

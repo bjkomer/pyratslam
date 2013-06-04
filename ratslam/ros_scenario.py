@@ -17,7 +17,7 @@ odometry.add_interface('ros', topic="/navbot/odom")
 # Add a visual video camera
 camera = VideoCamera()
 camera.translate(x=0.2, y=0.0, z=0.9)
-camera.properties(cam_far=700, cam_height=512, cam_width=512)
+camera.properties(cam_far=700, cam_height=512, cam_width=512, Vertical_Flip=False)
 camera.frequency(frequency=30)
 navbot.append(camera)
 camera.add_interface('ros', topic="/navbot/camera")

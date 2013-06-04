@@ -1,6 +1,5 @@
 from numpy import *
 from scipy import ndimage
-import glumpy
 
 #TEMP - hardcoded for now, will come from a config file or defaults
 PC_DIM_XY = 21
@@ -116,11 +115,6 @@ class PoseCellNetwork:
     vtrans /= self.pc_vtrans_scale
     vrot /= self.pc_vrot_scale #TODO ?? is this right? 
 
-    """
-    print("after normalization")
-    print(self.posecells)
-    print("")
-    """
     #TODO - this can be optimized better in the future
     mid = math.floor( self.shape[2] / 2 )
     for dir_pc in xrange( self.shape[2] ):
@@ -130,35 +124,12 @@ class PoseCellNetwork:
           ndimage.correlate( self.posecells[:,:,dir_pc], self.kernel_2d, mode='wrap', origin=origin )
     # Remove any negative values
     self.posecells[self.posecells < 0] = 0
-    """
-    print("after xy filter")
-    print(self.posecells)
-    print("")
-    print("")
-    print(self.posecells[:,:,0])
-    print(self.posecells[:,:,1])
-    print(self.posecells[:,:,2])
-    print(self.posecells[:,:,3])
-    print(self.posecells[:,:,4])
-    print("")
-    """
     # and then use a 1D gaussian across the theta layers
     #TODO - this can be optimized better in the future
     origin = math.floor(vrot+.5)
     for x in xrange( self.shape[0] ):
       for y in xrange( self.shape[1] ):
         self.posecells[x,y,:] = ndimage.correlate( self.posecells[x,y,:], self.kernel_1d, mode='wrap', origin=origin )
-    """
-    print("after th filter")
-    print(self.posecells)
-    print("")
-    print(self.posecells[0,0,:])
-    print(self.posecells[0,1,:])
-    print(self.posecells[0,2,:])
-    print(self.posecells[0,3,:])
-    print(self.posecells[0,4,:])
-    print("")
-    """
     # Remove any negative values
     self.posecells[self.posecells < 0] = 0
 
@@ -203,19 +174,6 @@ class PoseCellNetwork:
     return self.max_pc
 
   # Make the pose cell network easily printable in a human readable way
-  def __str__( self ):
-    #TODO: make this better
-    #print ( self.posecells )
-    fig = glumpy.figure( (512,512) )
-    image = glumpy.Image(self.posecells[:,:,0].astype(float32))
-    
-    
-    """
-    @fig.event
-    def on_draw():
-      fig.clear()
-      image.update()
-      image.draw( x=0, y=0, z=0, width=fig.width, height=fig.height )
-    """
-    return "a"
-    #glumpy.show() #TODO: this hangs, which is terrible, don't put it here
+  #def __str__( self ):
+  #  #TODO: make this better
+  #  #print ( self.posecells )
