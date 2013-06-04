@@ -29,7 +29,7 @@ class ViewTemplates():
     mask_l = base%im_x > x_range[0] # Remove the left section of the image
     mask_r = base%im_x < x_range[1] # Remove the right section of the image
     mask_sy = ( base / im_x - y_range[0] ) % y_step != 0 # subsample in y direction
-    mask_sx = ( base % im_x - x_range[0] ) % z_step != 0 # subsample in x direction
+    mask_sx = ( base % im_x - x_range[0] ) % x_step != 0 # subsample in x direction
 
     self.mask = mask_t & mask_b & mask_l & mask_r & mask_sy & mask_sx
 

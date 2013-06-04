@@ -1,5 +1,6 @@
 # Reads ROS Pose messages and uses these as input to the pose network
 from posecell_network import PoseCellNetwork
+from view_templates import ViewTemplates
 from numpy import *
 from scipy import ndimage
 import matplotlib.pyplot as plt
@@ -9,6 +10,8 @@ import pylab
 import rospy
 from geometry_msgs.msg import Twist, TwistWithCovariance
 from nav_msgs.msg import Odometry
+from sensor_msgs.msg import CompressedImage
+#from sensor_msgs.msg import Image #FIXME: test with just Image for now
 from collections import deque
 
 POSE_SIZE = (50,50,20)
@@ -28,6 +31,9 @@ def main():
   plt.ion()
   plt.show()
 
+  # TODO: put reasonable values here
+  vts = ViewTemplates(x_range=(128,384),y_range=(128,384),x_step=2,y_step=2,im_x=512,im_y=512,match_threshold=1)
+
   pc = pcn.posecells
   pc_index = nonzero(pc>.002)
   pc_value = pc[pc_index] * 100
@@ -36,16 +42,31 @@ def main():
   ax.set_ylim3d([0, POSE_SIZE[1]])
   ax.set_zlim3d([0, POSE_SIZE[2]])
   
+  # This is called whenever new visual information is received
+  def vis_callback( data ):
+    print("got image")
+    #print(data)
+    print(dir(data))
+    print(len(data.data))
+    import numpy
+    im = array(data.deserialize_numpy(data.header, numpy ), dtype=uint8)
+    #print(im)
+    pc_max = pcn.get_pc_max()
+    #vts.match( input=im,pc_x=pc_max[0],pc_y=pc_max[1],pc_th=pc_max[2] )
+    #plt.imshow( im, cmap=plt.cm.gray ) # show the image to make sure it is actually here
+
   
-  
-  def callback(data):
+  # This is called whenever new odometry information is received
+  def odom_callback( data ):
     twist = data.twist.twist
     # If there is barely any motion, don't bother flooding the queue with it
     if abs(twist.linear.x) > .01 or abs(twist.angular.z) > 0.01:
       twist_data.append(twist)
 
   rospy.init_node('posecells', anonymous=True)
-  sub = rospy.Subscriber('navbot/odom',Odometry,callback)
+  sub_odom = rospy.Subscriber('navbot/odom',Odometry,odom_callback)
+  sub_vis = rospy.Subscriber('navbot/camera/image/compressed',CompressedImage,vis_callback)
+  #sub_vis = rospy.Subscriber('navbot/camera/image',Image,vis_callback)
  
   while not rospy.is_shutdown():
     if len(twist_data) > 0:
