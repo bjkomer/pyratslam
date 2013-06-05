@@ -14,6 +14,9 @@ class ViewTemplate():
     # TODO: fix this, currently super terrible temporary matching method
     return sum( abs( self.template - new_template ) )
 
+  def location( self ):
+    return ( self.pc_x, self.pc_y, self.pc_th )
+
 # Contains all of the individual templates
 class ViewTemplates():
 
@@ -32,6 +35,7 @@ class ViewTemplates():
     mask_sx = ( base % im_x - x_range[0] ) % x_step != 0 # subsample in x direction
 
     self.mask = mask_t & mask_b & mask_l & mask_r & mask_sy & mask_sx
+    self.mask = self.mask.reshape( ( im_x, im_y ) )
 
   def __getitem__( self ):
     return self.templates[ index ]
@@ -41,7 +45,7 @@ class ViewTemplates():
     template = input[self.mask].reshape(self.shape) # subsample the image
     match_val = [ t.match( template ) for t in self.templates ]
 
-    if len( match_val ) == 0 or min( match_val ) < self.match_threshold:
+    if len( match_val ) == 0 or min( match_val ) > self.match_threshold:
       new_template = ViewTemplate( pc_x,pc_y,pc_th,template )
       self.templates.append( new_template )
       return new_template
