@@ -10,7 +10,7 @@ navbot.append(keyboard)
 
 # An odometry sensor to get odometry information
 odometry = Odometry()
-odometry.frequency(frequency=3)# TEMP - slow down for testing
+odometry.frequency(frequency=10)# TEMP - slow down for testing
 navbot.append(odometry)
 odometry.add_interface('ros', topic="/navbot/odom")
 

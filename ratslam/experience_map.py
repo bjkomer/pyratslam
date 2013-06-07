@@ -5,9 +5,9 @@ from numpy import *
 
 def clip_rad_180( angle ):
   if angle > pi:
-    angle -= floor( angle / pi ) * pi
+    angle -= ceil( angle / ( 2 * pi ) ) * 2 * pi
   elif angle <= -pi:
-    angle += floor( abs( angle ) / pi ) * pi
+    angle += ceil( abs( angle ) / ( 2 * pi ) ) * 2 * pi
   return angle
 
 class Experience():
@@ -44,7 +44,7 @@ class ExperienceMap():
   def create( self, pc_loc, vt=None ):
     """Creates a new experience and links it to the current one"""
 
-    exp = Experience( loc, ( self.accum_delta_x, self.accum_delta_y ), vt )
+    exp = Experience( pc_loc, ( self.accum_delta_x, self.accum_delta_y ), vt )
     self.experiences.append( exp )
     # TODO: linking will go here
     self.current_exp = exp
