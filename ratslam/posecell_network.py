@@ -6,10 +6,10 @@ PC_DIM_XY = 21
 PC_DIM_TH = 36
 PC_E_SIGMA = 1 # sigma for the excitatory gaussian kernel
 PC_I_SIGMA = 2 # sigma for the inhibitory gaussian kernel
-PC_E_DIM   = 7 +2# the size of the excitatory kernel
-PC_I_DIM   = 5 +2# the size of the inhibitory kernel
+PC_E_DIM   = 7 #+2# the size of the excitatory kernel
+PC_I_DIM   = 5 #+2# the size of the inhibitory kernel
 PC_GLOBAL_INHIB = 0.00002 # value of global inhibition
-PC_CELL_X_SIZE = 1
+PC_CELL_X_SIZE = .2#1
 PC_C_SIZE_TH = 2.0 *pi / PC_DIM_TH
 
 class PoseCellNetwork:
@@ -152,7 +152,7 @@ class PoseCellNetwork:
     # 2. Inter-Layer Update
 
     #input and output the same might not work
-    self.posecells = ndimage.correlate(self.posecells, self.kernel_3d, mode='wrap')
+    #self.posecells = ndimage.correlate(self.posecells, self.kernel_3d, mode='wrap')
 
     # 3. Global Inhibition
     self.posecells[self.posecells < self.global_inhibition] = 0
