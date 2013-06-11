@@ -3,14 +3,16 @@ from posecell_network import PoseCellNetwork
 from view_templates import ViewTemplates
 from experience_map import ExperienceMap
 from numpy import *
-from scipy import ndimage
+from scipy import ndimage, sparse
 import matplotlib.pyplot as plt
 from matplotlib import cm
 from mpl_toolkits.mplot3d import Axes3D
 import pylab
 import rospy
-from geometry_msgs.msg import Twist, TwistWithCovariance
+from geometry_msgs.msg import Twist, TwistWithCovariance, Pose2D
 from nav_msgs.msg import Odometry
+from std_msgs.msg import Float64MultiArray, MultiArrayLayout, MultiArrayDimension
+from rospy.numpy_msg import numpy_msg
 #from sensor_msgs.msg import CompressedImage
 from sensor_msgs.msg import Image #FIXME: test with just Image for now
 from cv_bridge import CvBridge, CvBridgeError
@@ -26,13 +28,7 @@ Y_RANGE = ( 64, 192 ) #( 128, 384 )
 X_STEP = 2
 Y_STEP = 2
 MATCH_THRESHOLD = 10 # the smaller the value, the easier it is to make a match
-VT_REFRESH_PERIOD = 15#15 # how fast the image displayed refreshes, lower number means faster
-EM_REFRESH_PERIOD = 1 #1 how fast the experience map refreshes, lower number means faster
-PC_REFRESH_PERIOD = 1#1 # how fast the experience map refreshes, lower number means faster
 ODOM_FREQ = 10 # Frequency in which odomentry messages are published
-NUM_IMAGES = 4450 #531 # The number of images to read before the program will exit, this is for cProfile purposes only
-DISPLAY = True        # Whether or not visual displays will be shown. Turn this off to make things run faster
-DISPLAY_IMAGE = True # Whether or not the images coming from ROS will be displayed
 
 class RatslamRos():
 
@@ -48,13 +44,18 @@ class RatslamRos():
     midpoint = (math.floor(POSE_SIZE[0]/2),math.floor(POSE_SIZE[1]/2),math.floor(POSE_SIZE[2]/2))
     self.pcn.inject( 1, midpoint )
 
+    # Set up layout for ROS message
+    dim = [ MultiArrayDimension( label="x", size=POSE_SIZE[0], stride=POSE_SIZE[0] * POSE_SIZE[1] * POSE_SIZE[2] ),
+            MultiArrayDimension( label="y", size=POSE_SIZE[1], stride=POSE_SIZE[1] * POSE_SIZE[2] ),
+            MultiArrayDimension( label="th", size=POSE_SIZE[2], stride=POSE_SIZE[2] ) ]
+    self.pc_layout = MultiArrayLayout(dim=dim)
+
     # Initialize the View Templates
     # TODO: put reasonable values here
     self.vts = ViewTemplates( x_range=X_RANGE, y_range=Y_RANGE, 
                               x_step=X_STEP, y_step=Y_STEP, 
                               im_x=IM_SIZE[0], im_y=IM_SIZE[1], 
                               match_threshold=MATCH_THRESHOLD)
-    self.image_data = deque() #TODO: these should really not be stored anywhere for long
     self.vt_count = 0
     self.bridge = CvBridge()
 
@@ -65,50 +66,12 @@ class RatslamRos():
     pc = self.pcn.posecells
     pc_index = nonzero(pc>.002)
     pc_value = pc[pc_index] * 100
-    if DISPLAY:
-      self.pc_fig = plt.figure(1)
-      self.pc_ax = self.pc_fig.add_subplot(111, projection='3d')
-      self.pc_ax.set_title("Pose Cell Network")
-      #self.pc_ax.set_autoscale_on(False)
-      #self.pc_ax.autoscale(False)
-      #self.pc_ax.hold(False)
-
-      self.vts_fig = plt.figure(2)
-      self.vts_ax = self.vts_fig.add_subplot(111)
-      self.vts_ax.set_title("Visual Field")
-      
-      self.em_fig = plt.figure(3)
-      self.em_ax = self.em_fig.add_subplot(111)
-      self.em_ax.set_title("Experience Map")
-      self.em_ax.hold(True)
-     
-      plt.ion()
-      plt.show()
-
-      self.pc_ax.set_xlim3d([0, POSE_SIZE[0]])
-      self.pc_ax.set_ylim3d([0, POSE_SIZE[1]])
-      self.pc_ax.set_zlim3d([0, POSE_SIZE[2]])
-      self.pc_ax.autoscale(False)
-      self.pc_ax.hold(False)
-      
-      self.pc_ax.scatter(pc_index[0],pc_index[1],pc_index[2],s=pc_value)
-      self.pc_ax.set_xlim3d([0, POSE_SIZE[0]])
-      self.pc_ax.set_ylim3d([0, POSE_SIZE[1]])
-      self.pc_ax.set_zlim3d([0, POSE_SIZE[2]])
   
   # This is called whenever new visual information is received
   def vis_callback( self, data ):
 
-    #import pdb; pdb.set_trace() # TEMP: for debugging
-    
     cv_im = self.bridge.imgmsg_to_cv( data, "mono8" )
     im = asarray( cv_im )
-
-    if DISPLAY_IMAGE:
-      self.vt_count += 1
-      if self.vt_count >= VT_REFRESH_PERIOD:
-        self.vt_count = 0
-        self.image_data.append( im )
 
     pc_max = self.pcn.get_pc_max()
     template_match = self.vts.match( input=im,pc_x=pc_max[0],pc_y=pc_max[1],pc_th=pc_max[2] )
@@ -124,49 +87,29 @@ class RatslamRos():
 
   def run( self ):
 
-    rospy.init_node('posecells', anonymous=True)
-    sub_odom = rospy.Subscriber('navbot/odom',Odometry,self.odom_callback)
-    sub_vis = rospy.Subscriber('navbot/camera/image',Image,self.vis_callback)
-    em_prev_xy = ( 0, 0 )
+    rospy.init_node( 'posecells', anonymous=True )
+    sub_odom = rospy.Subscriber( 'navbot/odom',Odometry,self.odom_callback )
+    sub_vis = rospy.Subscriber( 'navbot/camera/image',Image,self.vis_callback )
+    pub_pc = rospy.Publisher( 'navbot/posecells', numpy_msg(Float64MultiArray) )
+    pub_em = rospy.Publisher( 'navbot/experiencemap', Pose2D )
 
     while not rospy.is_shutdown():
       if len(self.twist_data) > 0:
-        self.em_count += 1
-        self.pc_count += 1
         twist = self.twist_data.popleft()
         vtrans = twist.linear.x / self.odom_freq
         vrot = twist.angular.z / self.odom_freq
         self.pcn.update( ( vtrans, vrot ) )
         pc_max = self.pcn.get_pc_max()
         self.em.update( vtrans, vrot, pc_max )
+
+        #pc = sparse.csr_matrix( self.pcn.posecells ) # Create scipy sparse matrix
+        pc = self.pcn.posecells
+
+        em_msg = Pose2D()
+        em_msg.x, em_msg.y = self.em.get_current_point() # TODO: add theta as well
         
-        if self.pc_count >= PC_REFRESH_PERIOD:
-          self.pc_count = 0
-          pc = self.pcn.posecells
-          pc_index = nonzero(pc>.002)
-          pc_value = pc[pc_index] * 100
-          if DISPLAY:
-            self.pc_ax.scatter(pc_index[0],pc_index[1],pc_index[2],s=pc_value)
-            self.pc_ax.set_xlim3d([0, POSE_SIZE[0]])
-            self.pc_ax.set_ylim3d([0, POSE_SIZE[1]])
-            self.pc_ax.set_zlim3d([0, POSE_SIZE[2]])
-        
-        if self.em_count >= EM_REFRESH_PERIOD:
-          self.em_count = 0
-          em_xy = self.em.get_current_point()
-          if DISPLAY:
-            self.em_ax.plot( [ em_prev_xy[0], em_xy[0] ], [ em_prev_xy[1], em_xy[1] ],'b')
-          em_prev_xy = em_xy
-        if DISPLAY:
-          plt.pause( 0.0001 ) # This is needed for the display to update
-      if len( self.image_data ) > 0:
-        im = self.image_data.popleft()
-        self.im_count += 1
-        if DISPLAY:
-          self.vts_ax.imshow( im, cmap=plt.cm.gray )
-          plt.pause( 0.0001 )
-        if self.im_count >= NUM_IMAGES / VT_REFRESH_PERIOD:
-          break # Exit the loop, so cProfile can return stats
+        pub_pc.publish( self.pc_layout, pc.ravel() )
+        pub_em.publish( em_msg )
 
 def main():
   ratslam = RatslamRos()

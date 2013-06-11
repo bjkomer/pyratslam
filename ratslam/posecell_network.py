@@ -1,5 +1,6 @@
 from numpy import *
 from scipy import ndimage
+import pyopencl as cl
 
 #TEMP - hardcoded for now, will come from a config file or defaults
 PC_DIM_XY = 21
@@ -152,7 +153,7 @@ class PoseCellNetwork:
     # 2. Inter-Layer Update
 
     #input and output the same might not work
-    #self.posecells = ndimage.correlate(self.posecells, self.kernel_3d, mode='wrap')
+    self.posecells = ndimage.correlate(self.posecells, self.kernel_3d, mode='wrap')
 
     # 3. Global Inhibition
     self.posecells[self.posecells < self.global_inhibition] = 0
