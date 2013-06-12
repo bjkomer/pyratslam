@@ -10,8 +10,6 @@ from geometry_msgs.msg import Pose2D
 from std_msgs.msg import Float64MultiArray, MultiArrayLayout, MultiArrayDimension
 from rospy.numpy_msg import numpy_msg
 from numpy import *
-import glumpy
-from OpenGL import GLUT as glut
 
 # NOTE: using matplotlib for now, try will glumpy later, to see if queues can be removed
 
@@ -35,25 +33,29 @@ class RatslamViewer( ):
     self.pc_ax.set_ylim3d([0, POSE_SIZE[1]])
     self.pc_ax.set_zlim3d([0, POSE_SIZE[2]])
     self.pc_ax.set_autoscale_on(False)
-    #self.pc_ax.hold(False)
+    self.pc_fig.show()
+    self.pc_fig.canvas.draw()
     
     self.im_fig = plt.figure(2)
     self.im_ax = self.im_fig.add_subplot(111)
     self.im_ax.set_title("Visual Field")
+    self.im_im = self.im_ax.imshow( zeros( ( 256, 256, 4 ) ) ) # Blank starting image
+    self.im_fig.show()
+    self.im_im.axes.figure.canvas.draw()
     
     self.em_fig = plt.figure(3)
     self.em_ax = self.em_fig.add_subplot(111)
     self.em_ax.set_title("Experience Map")
     self.em_ax.hold(True)
+    self.em_fig.show()
+    self.em_fig.canvas.draw()
 
     self.vt_fig = plt.figure(4)
     self.vt_ax = self.vt_fig.add_subplot(111)
     self.vt_ax.set_title("Visual Template")
-   
-    plt.ion()
-    plt.show()
-
-    self.im_gl = zeros((256,256,4), dtype=float32)
+    self.vt_im = self.vt_ax.imshow( zeros( ( 256, 256 ) ), cmap=plt.cm.gray ) # Blank starting image
+    self.vt_fig.show()
+    self.vt_fig.canvas.draw()
 
   def em_callback( self, data ):
     self.em_data.append( ( data.x, data.y ) )
@@ -83,15 +85,6 @@ class RatslamViewer( ):
     sub_vt = rospy.Subscriber( self.root + '/visualtemplate', Image, self.vt_callback)
     em_prev_xy = ( 0, 0 )
 
-    #fig = glumpy.figure( ( 256, 256 ) )
-    #im_gl = glumpy.image.Image( self.im_gl, colormap=glumpy.colormap.Hot)
-
-    #@fig.event
-    #def on_draw():
-    #  fig.clear()
-    #  im_gl.update()
-    #  im_gl.draw( x=0, y=0, z=0, width=fig.width, height=fig.height )
-    
     pc_scatter = None
     while not rospy.is_shutdown():
       if len(self.em_data) > 0:
@@ -99,16 +92,11 @@ class RatslamViewer( ):
         # TODO: Incorporate direction being faced into the display
         self.em_ax.plot( [ em_prev_xy[0], em[0] ], [ em_prev_xy[1], em[1] ],'b')
         em_prev_xy = em
-        plt.pause( 0.0001 )
+        self.em_fig.canvas.draw()
       if len( self.im_data ) > 0:
         im = self.im_data.popleft()
-        self.im_ax.imshow( im )
-        plt.pause( 0.0001 )
-        #self.im_gl = self.im_data.popleft()
-        #im_gl = glumpy.image.Image( self.im_gl, colormap=glumpy.colormap.Hot)
-        #glut.glutMainLoopEvent()
-        #on_draw()
-        #glut.glutSwapBuffers()
+        self.im_im.set_data( im )
+        self.im_im.axes.figure.canvas.draw()
       if len( self.pc_data ) > 0:
         pc = self.pc_data.popleft()
         # TODO: do conversion from sparse matrix here
@@ -118,15 +106,12 @@ class RatslamViewer( ):
         if pc_scatter is not None:
           pc_scatter.remove()
         pc_scatter = self.pc_ax.scatter(pc_index[0],pc_index[1],pc_index[2],s=pc_value)
-        #self.pc_ax.set_xlim3d([0, POSE_SIZE[0]])
-        #self.pc_ax.set_ylim3d([0, POSE_SIZE[1]])
-        #self.pc_ax.set_zlim3d([0, POSE_SIZE[2]])
-        plt.pause( 0.0001 )
+        
+        self.pc_fig.canvas.draw()
       if len( self.vt_data ) > 0:
         vt = self.vt_data.popleft()
-        self.vt_ax.imshow( vt, cmap=plt.cm.gray )
-        plt.pause( 0.0001 )
-
+        self.vt_im.set_data( vt )
+        self.vt_im.axes.figure.canvas.draw()
 
 def main():
   viewer = RatslamViewer( root="navbot" )
