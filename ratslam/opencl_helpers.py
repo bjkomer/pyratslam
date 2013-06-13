@@ -16,6 +16,11 @@ def correlate_x( queue ):
     const int x = get_global_id(0);
     const int y = get_global_id(1);
     const int z = get_global_id(2);
+
+    for ( int idx = 0; idx < filterSize; idx++ ) {
+      sum += input[ x + idx ] * filter[ idx ]
+    }
+    output[ x + y * get_global_size(0) + z * get_global_size(0) * get_global_size(1) ] = sum;
   }
   """
 
