@@ -1,45 +1,52 @@
 import pyopencl as cl
 import numpy
 import math
-import time
 from mako.template import Template
 from scipy import ndimage
 
 
 class Convolution:
-  def __init__ ( self, im, fil, larger_buffer=False, sep=False ):
+  def __init__ ( self, im, fil, larger_buffer=True, sep=True, type=numpy.float32 ):
     
     self.ctx = cl.create_some_context()
     self.queue = cl.CommandQueue( self.ctx )
+    
+    self.larger_buffer = larger_buffer
+    self.sep = sep # whether or not the convolution is separated into 1D chunks
+    self.type = type #TODO: type should just come from the input image, do a check to see if it matches the filter
+
+    if im is not None and fil is not None:
+      self.set_params( im, fil )
+
+  def set_params( self, im, fil ):
+    """Set the image and filter to be used"""
 
     self.filter_len = max( fil.shape )
     self.offset = int( math.floor( self.filter_len / 2 ) )
     self.image_len = len( im )
     self.dim = im.ndim
-    self.larger_buffer = larger_buffer
     self.fil = fil
     self.im_shape = im.shape
-    self.sep = sep # whether or not the convolution is separated into 1D chunks
 
     length = self.image_len
     
     # Do the wrapping
-    if larger_buffer:
+    if self.larger_buffer:
       length = self.image_len + 2 * self.offset
       if self.dim == 1:
-        self.im = numpy.empty( ( length ), dtype=numpy.float32)
+        self.im = numpy.empty( ( length ), dtype=self.type)
         self.im[ self.offset : -self.offset ] = im
         self.im[ : self.offset ] = im[ -2 * self.offset : -self.offset ]
         self.im[ -self.offset : ] = im[ self.offset : 2 * self.offset ]
       elif self.dim == 2:
-        self.im = numpy.empty( ( length, length ), dtype=numpy.float32)
+        self.im = numpy.empty( ( length, length ), dtype=self.type)
         self.im[ self.offset : -self.offset, self.offset : - self.offset ] = im
         self.im[ : self.offset, :  ] = self.im[ length -2 * self.offset : length - self.offset, : ]
         self.im[ -self.offset :, : ] = self.im[ self.offset : 2 * self.offset, : ]
         self.im[ :, : self.offset  ] = self.im[ :, length - 2 * self.offset : length - self.offset ]
         self.im[ :, -self.offset : ] = self.im[ :, self.offset : 2 * self.offset ]
       elif self.dim == 3:
-        self.im = numpy.empty( ( length, length, length ), dtype=numpy.float32)
+        self.im = numpy.empty( ( length, length, length ), dtype=self.type)
         self.im[ self.offset : -self.offset, self.offset : - self.offset, self.offset : - self.offset ] = im
         self.im[ : self.offset, :, :  ] = self.im[ length -2 * self.offset : length - self.offset, :, : ]
         self.im[ -self.offset :, :, : ] = self.im[ self.offset : 2 * self.offset, :, : ]
@@ -49,8 +56,6 @@ class Convolution:
         self.im[ :, :, -self.offset : ] = self.im[ :, :, self.offset : 2 * self.offset ]
     else:
       self.im = im
-
-
 
     self.textconf = { 'imsize' : length,
                       'filsize' : self.filter_len,
@@ -212,9 +217,9 @@ class Convolution:
         else:        # 3D Modulo
           raise NotImplemented
 
-  def build_program( self, textconf=None ):
+    self.build_program()
 
-    tstart = time.time()
+  def build_program( self, textconf=None ):
 
     if textconf is None:
       textconf = self.textconf
@@ -223,20 +228,11 @@ class Convolution:
     else:
       text = Template( self.text, output_encoding='ascii' ).render( **textconf )
 
-    self.program = cl.Program( self.ctx, text ).build()
-
-    print "Building Program...", time.time() - tstart
-
   def load_data( self ):
 
     raise NotImplemented
 
   def execute( self, style='2D' ):
-    
-    print "image\n", self.im
-    print "filter\n", self.fil
-    
-    tstart = time.time()
     
     if self.sep:
       if self.dim == 1:
@@ -273,12 +269,6 @@ class Convolution:
       out = numpy.empty_like( self.im )
       cl.enqueue_read_buffer( self.queue, self.dest_buf, out ).wait()
 
-    
-    # TEMP - put this first to show the whole buffer
-    #print "image\n", self.im
-    #print "filter\n", self.fil
-    #print "filtered image\n", out
-    
     if self.larger_buffer:
       if self.dim == 1:
         out = out[self.offset:-self.offset]
@@ -286,105 +276,70 @@ class Convolution:
         out = out[self.offset:-self.offset,self.offset:-self.offset]
       elif self.dim == 3:
         out = out[self.offset:-self.offset,self.offset:-self.offset,self.offset:-self.offset]
-    
-    print "filtered image", time.time() - tstart, "\n", out
 
-    self.out = out
-    self.scipy_convolution()
+    return out
 
-  def scipy_convolution( self ):
-    """Performs the convolution without OpenCL, as a comparison"""
+  def replace_filter( self, fil ):
+    """Replaces the currently loaded filter with a new one, must be the same size"""
 
-    im = self.im
-    if self.larger_buffer:
-      if self.dim == 1:
-        im = self.im[self.offset:-self.offset]
-      elif self.dim == 2:
-        im = self.im[self.offset:-self.offset,self.offset:-self.offset]
-      elif self.dim == 3:
-        im = self.im[self.offset:-self.offset,self.offset:-self.offset,self.offset:-self.offset]
-    
-    tstart = time.time()
-    
-    if self.sep:
-      if self.dim == 1:
-        out = ndimage.correlate1d( input=im, weights=self.fil.tolist(), axis=0, mode='wrap', origin=0 )
-      elif self.dim == 2:
-        out = ndimage.correlate1d( input=im, weights=self.fil.tolist(), axis=0, mode='wrap', origin=0 )
-        out = ndimage.correlate1d( input=out, weights=self.fil.tolist(), axis=1, mode='wrap', origin=0 )
-      elif self.dim == 3:
-        out = ndimage.correlate1d( input=im, weights=self.fil.tolist(), axis=0, mode='wrap', origin=0 )
-        out = ndimage.correlate1d( input=out, weights=self.fil.tolist(), axis=1, mode='wrap', origin=0 )
-        out = ndimage.correlate1d( input=out, weights=self.fil.tolist(), axis=2, mode='wrap', origin=0 )
+    if self.fil.shape == fil.shape and self.fil.dtype == fil.dtype:
+      self.fil = fil
+      #TODO: this might not be needed
+      mf = cl.mem_flags  
+      self.fil_buf = cl.Buffer(self.ctx, mf.READ_ONLY | mf.COPY_HOST_PTR, hostbuf=self.fil)
     else:
-      out = ndimage.correlate( im, self.fil, mode='wrap' )
-    print "filtered scipy image", time.time() - tstart, "\n", out
-    
-    assert numpy.array_equal( out, self.out ), "The PyOpenCL result does not match with Scipy"
+      raise TypeError, "Filter must match old filter in shape and type. Old filter is of type " + \
+          str( self.fil.dtype) + " and shape " + str( self.fil.shape ) + ", while new filter is of type " + \
+          str( fil.dtype ) + " and shape " + str( fil.shape ) + ". To change shape/type, use new_filter()" 
+  
+  def new_filter( self, fil ):
+    """Replaces the currently loaded filter with a new one, and updates the buffers and opencl program accordingly"""
+    raise NotImplemented
+  
+  def replace_image( self, im ):
+    """Replaces the currently loaded image with a new one, must be the same size"""
 
-class Example:
-  def __init__ ( self ):
-    
-    self.ctx = cl.create_some_context()
-    self.queue = cl.CommandQueue( self.ctx )
-
-    mf = cl.mem_flags
-
-    #initialize client side (CPU) arrays
-    self.a = numpy.array(range(10), dtype=numpy.float32)
-    self.b = numpy.array(range(10), dtype=numpy.float32)
-
-    #create OpenCL buffers
-    self.a_buf = cl.Buffer(self.ctx, mf.READ_ONLY | mf.COPY_HOST_PTR, hostbuf=self.a)
-    self.b_buf = cl.Buffer(self.ctx, mf.READ_ONLY | mf.COPY_HOST_PTR, hostbuf=self.b)
-    self.dest_buf = cl.Buffer(self.ctx, mf.WRITE_ONLY, self.b.nbytes)
-
-    self.text = """
-      __kernel void part1(__global float* a, __global float* b, __global float* c)
-      {
-        unsigned int i = get_global_id(0);
-        c[i] = a[i] + 2* b[i];
-      }
-      """
-
-  def build_program( self, textconf=None ):
-
-    if textconf is None:
-      text = self.text
+    if self.im.shape == im.shape and self.im.dtype == im.dtype:
+      # Do the wrapping
+      if self.larger_buffer:
+        length = self.image_len + 2 * self.offset
+        if self.dim == 1:
+          self.im = numpy.empty( ( length ), dtype=self.type)
+          self.im[ self.offset : -self.offset ] = im
+          self.im[ : self.offset ] = im[ -2 * self.offset : -self.offset ]
+          self.im[ -self.offset : ] = im[ self.offset : 2 * self.offset ]
+        elif self.dim == 2:
+          self.im = numpy.empty( ( length, length ), dtype=self.type)
+          self.im[ self.offset : -self.offset, self.offset : - self.offset ] = im
+          self.im[ : self.offset, :  ] = self.im[ length -2 * self.offset : length - self.offset, : ]
+          self.im[ -self.offset :, : ] = self.im[ self.offset : 2 * self.offset, : ]
+          self.im[ :, : self.offset  ] = self.im[ :, length - 2 * self.offset : length - self.offset ]
+          self.im[ :, -self.offset : ] = self.im[ :, self.offset : 2 * self.offset ]
+        elif self.dim == 3:
+          self.im = numpy.empty( ( length, length, length ), dtype=self.type)
+          self.im[ self.offset : -self.offset, self.offset : - self.offset, self.offset : - self.offset ] = im
+          self.im[ : self.offset, :, :  ] = self.im[ length -2 * self.offset : length - self.offset, :, : ]
+          self.im[ -self.offset :, :, : ] = self.im[ self.offset : 2 * self.offset, :, : ]
+          self.im[ :, : self.offset, :  ] = self.im[ :, length - 2 * self.offset : length - self.offset, : ]
+          self.im[ :, -self.offset :, : ] = self.im[ :, self.offset : 2 * self.offset, : ]
+          self.im[ :, :, : self.offset  ] = self.im[ :, :, length - 2 * self.offset : length - self.offset ]
+          self.im[ :, :, -self.offset : ] = self.im[ :, :, self.offset : 2 * self.offset ]
+      else:
+        self.im = im
+      #TODO: this might not be needed
+      mf = cl.mem_flags
+      self.im_buf = cl.Buffer(self.ctx, mf.READ_ONLY | mf.COPY_HOST_PTR, hostbuf=self.im)
     else:
-      text = Template( self.text, output_encoding='ascii' ).render( **textconf )
-
-    self.program = cl.Program( self.ctx, text ).build()
-
-  def load_data( self ):
-
+      raise TypeError, "Image must match old Image in shape and type. Old image is of type " + \
+          str( self.fil.dtype) + " and shape " + str( self.fil.shape ) + ", while new image is of type " + \
+          str( fil.dtype ) + " and shape " + str( fil.shape ) + ". To change shape/type, use new_image()" 
+  
+  def new_image( self, im ):
+    """Replaces the currently loaded image with a new one, and updates the buffers and opencl program accordingly"""
     raise NotImplemented
 
-  def execute( self ):
-    
-    self.program.part1( self.queue, self.a.shape, None, self.a_buf, self.b_buf, self.dest_buf )
-    c = numpy.empty_like( self.a )
-    cl.enqueue_read_buffer( self.queue, self.dest_buf, c ).wait()
-    print "a", self.a
-    print "b", self.b
-    print "c", c
-
 def main():
-  #example = Example()
-  #example.build_program()
-  #example.execute()
-
-  # Set test up data
-  #im = numpy.zeros( ( 10, 10 ), dtype=numpy.float32 )
-  #im = numpy.zeros( ( 10000, 10000 ), dtype=numpy.float32 )
   im_2d = numpy.random.randint(10, size=(10000,10000)).astype( numpy.float32 )
-  #im[5,5] = 1
-  #im[0,0] = 2
-  #im[0,9] = 3
-  #im[1,9] = 4
-
-  #im = numpy.arange(100).reshape((10,10))
-
   im_3d = numpy.random.randint( 10, size=( 100, 100, 100 ) ).astype( numpy.float32 )
 
   fil_3d = numpy.ones( ( 10, 10, 10 ), dtype=numpy.float32 )
@@ -402,7 +357,6 @@ def main():
   #conv = Convolution( im=im_2d, fil=fil_1d, larger_buffer=True, sep=True )
   conv = Convolution( im=im_3d, fil=fil_1d, larger_buffer=True, sep=True )
   #conv = Convolution( im=im_3d, fil=fil_3d, larger_buffer=True, sep=False )
-  conv.build_program()
   conv.execute()
 
   # RESULT: Convolution using pyopencl and separated into successive 1D filters is the fastest

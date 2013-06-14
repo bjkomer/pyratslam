@@ -14,6 +14,11 @@ from numpy import *
 # NOTE: using matplotlib for now, try will glumpy later, to see if queues can be removed
 
 POSE_SIZE = ( 50, 50, 30 )
+# Booleans for whether or not certain displays will be shown
+EM_ENABLED = True
+IM_ENABLED = True
+PC_ENABLED = True
+VT_ENABLED = False
 
 class RatslamViewer( ):
   
@@ -25,37 +30,41 @@ class RatslamViewer( ):
     self.vt_data = deque() # Visual Templates
     
     self.bridge = CvBridge() # For converting ROS images into a readable format
-      
-    self.pc_fig = plt.figure(1)
-    self.pc_ax = self.pc_fig.add_subplot(111, projection='3d')
-    self.pc_ax.set_title("Pose Cell Network")
-    self.pc_ax.set_xlim3d([0, POSE_SIZE[0]])
-    self.pc_ax.set_ylim3d([0, POSE_SIZE[1]])
-    self.pc_ax.set_zlim3d([0, POSE_SIZE[2]])
-    self.pc_ax.set_autoscale_on(False)
-    self.pc_fig.show()
-    self.pc_fig.canvas.draw()
     
-    self.im_fig = plt.figure(2)
-    self.im_ax = self.im_fig.add_subplot(111)
-    self.im_ax.set_title("Visual Field")
-    self.im_im = self.im_ax.imshow( zeros( ( 256, 256, 4 ) ) ) # Blank starting image
-    self.im_fig.show()
-    self.im_im.axes.figure.canvas.draw()
+    if PC_ENABLED:
+      self.pc_fig = plt.figure(1)
+      self.pc_ax = self.pc_fig.add_subplot(111, projection='3d')
+      self.pc_ax.set_title("Pose Cell Network")
+      self.pc_ax.set_xlim3d([0, POSE_SIZE[0]])
+      self.pc_ax.set_ylim3d([0, POSE_SIZE[1]])
+      self.pc_ax.set_zlim3d([0, POSE_SIZE[2]])
+      self.pc_ax.set_autoscale_on(False)
+      self.pc_fig.show()
+      self.pc_fig.canvas.draw()
     
-    self.em_fig = plt.figure(3)
-    self.em_ax = self.em_fig.add_subplot(111)
-    self.em_ax.set_title("Experience Map")
-    self.em_ax.hold(True)
-    self.em_fig.show()
-    self.em_fig.canvas.draw()
+    if IM_ENABLED:
+      self.im_fig = plt.figure(2)
+      self.im_ax = self.im_fig.add_subplot(111)
+      self.im_ax.set_title("Visual Field")
+      self.im_im = self.im_ax.imshow( zeros( ( 256, 256, 4 ) ) ) # Blank starting image
+      self.im_fig.show()
+      self.im_im.axes.figure.canvas.draw()
+    
+    if EM_ENABLED:
+      self.em_fig = plt.figure(3)
+      self.em_ax = self.em_fig.add_subplot(111)
+      self.em_ax.set_title("Experience Map")
+      self.em_ax.hold(True)
+      self.em_fig.show()
+      self.em_fig.canvas.draw()
 
-    self.vt_fig = plt.figure(4)
-    self.vt_ax = self.vt_fig.add_subplot(111)
-    self.vt_ax.set_title("Visual Template")
-    self.vt_im = self.vt_ax.imshow( zeros( ( 256, 256 ) ), cmap=plt.cm.gray ) # Blank starting image
-    self.vt_fig.show()
-    self.vt_fig.canvas.draw()
+    if VT_ENABLED:
+      self.vt_fig = plt.figure(4)
+      self.vt_ax = self.vt_fig.add_subplot(111)
+      self.vt_ax.set_title("Visual Template")
+      self.vt_im = self.vt_ax.imshow( zeros( ( 256, 256 ) ), cmap=plt.cm.gray ) # Blank starting image
+      self.vt_fig.show()
+      self.vt_fig.canvas.draw()
 
   def em_callback( self, data ):
     self.em_data.append( ( data.x, data.y ) )
@@ -79,10 +88,14 @@ class RatslamViewer( ):
 
   def run( self ):
     rospy.init_node('ratslam_viewer', anonymous=True)
-    sub_em = rospy.Subscriber( self.root + '/experiencemap', Pose2D, self.em_callback)
-    sub_im = rospy.Subscriber( self.root + '/camera/image', Image, self.im_callback)
-    sub_pc = rospy.Subscriber( self.root + '/posecells', numpy_msg(Float64MultiArray), self.pc_callback)
-    sub_vt = rospy.Subscriber( self.root + '/visualtemplate', Image, self.vt_callback)
+    if EM_ENABLED:
+      sub_em = rospy.Subscriber( self.root + '/experiencemap', Pose2D, self.em_callback)
+    if IM_ENABLED:
+      sub_im = rospy.Subscriber( self.root + '/camera/image', Image, self.im_callback)
+    if PC_ENABLED:
+      sub_pc = rospy.Subscriber( self.root + '/posecells', numpy_msg(Float64MultiArray), self.pc_callback)
+    if VT_ENABLED:
+      sub_vt = rospy.Subscriber( self.root + '/visualtemplate', Image, self.vt_callback)
     em_prev_xy = ( 0, 0 )
 
     pc_scatter = None

@@ -116,5 +116,5 @@ def main():
   ratslam.run()
 
 if __name__ == "__main__":
-  #cProfile.run('main()','pstats.out') # TEMP: write out profiling stats
-  main()
+  cProfile.run('main()','pstats.out') # TEMP: write out profiling stats
+  #main()
