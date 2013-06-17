@@ -1,5 +1,7 @@
 from numpy import *
 from scipy import ndimage
+from scipy.special import cbrt
+from convolution import Convolution
 import pyopencl as cl
 
 #TEMP - hardcoded for now, will come from a config file or defaults
@@ -23,10 +25,16 @@ class PoseCellNetwork:
     self.kernel_3d = self.diff_gaussian( PC_E_DIM, PC_I_DIM, PC_E_SIGMA, PC_I_SIGMA, order=3 )
     self.kernel_2d = self.diff_gaussian( PC_E_DIM, PC_I_DIM, PC_E_SIGMA, PC_I_SIGMA, order=2 )
     self.kernel_1d = self.diff_gaussian( PC_E_DIM, PC_I_DIM, PC_E_SIGMA, PC_I_SIGMA, order=1 )
+    self.kernel_1d_sep = self.diff_gaussian_separable( PC_E_DIM, PC_I_DIM, PC_E_SIGMA, PC_I_SIGMA )
 
     self.global_inhibition = PC_GLOBAL_INHIB
     self.pc_vtrans_scale = PC_CELL_X_SIZE
     self.pc_vrot_scale = 2.0*pi/shape[2]#PC_C_SIZE_TH
+    
+    #TODO: maybe change everything to float32 to make it go faster?
+    #self.conv = Convolution( im=self.posecells, fil=self.kernel_1d, sep=True, type=float64 )
+    #self.conv = Convolution( im=self.posecells, fil=self.kernel_1d_sep, sep=True, type=float64 )
+    self.conv = Convolution( im=self.posecells, fil=self.kernel_3d, sep=False, type=float64 )
 
   # builds a 3D gaussian filter kernel with lengths of 'dim'
   def build_kernel( self, dim, sigma, order=3 ):
@@ -63,6 +71,54 @@ class PoseCellNetwork:
     else:
       pass #TODO: put an error statement here
 
+  # builds a 3D difference of gaussians filter kernel with lengths of 'dim'
+  def diff_gaussian( self, dim_e, dim_i, sigma_e, sigma_i, order=3 ):
+    dim = max(dim_e, dim_i)
+    if order==3:
+      f = zeros( ( dim, dim, dim ) )
+      center = math.floor( dim / 2 )
+      for x in xrange( dim ):
+        for y in xrange( dim ):
+          for z in xrange( dim ):
+            f[x,y,z] = ( 1 if max(x,y,z) <= center + dim_e and min(x,y,z) >= center - dim_e else 0 ) * \
+                1.0 / (sigma_e*math.sqrt(2*pi))**3 * \
+                math.exp( (-(x-center)**2 - (y-center)**2 - (z-center)**2 ) / (2*sigma_e**2)) - \
+                ( 1 if max(x,y,z) <= center + dim_i and min(x,y,z) >= center - dim_i else 0 ) * \
+                1.0 / (sigma_i*math.sqrt(2*pi))**3 * \
+                math.exp( (-(x-center)**2 - (y-center)**2 - (z-center)**2 ) / (2*sigma_i**2))
+
+      f /= abs(sum(f.ravel())) # normalize
+      return f
+    elif order==2:
+      f = zeros( ( dim, dim ) )
+      center = math.floor( dim / 2 )
+      for x in xrange( dim ):
+        for y in xrange( dim ):
+          f[x,y] = ( 1 if max(x,y) <= center + dim_e and min(x,y) >= center - dim_e else 0 ) * \
+              1.0 / (sigma_e * sigma_e * 2 * pi) * \
+              math.exp( (-(x-center)**2 - (y-center)**2 ) / (2*sigma_e**2)) - \
+              ( 1 if max(x,y) <= center + dim_i and min(x,y) >= center - dim_i else 0 ) * \
+              1.0 / (sigma_i * sigma_i * 2 * pi) * \
+              math.exp( (-(x-center)**2 - (y-center)**2 ) / (2*sigma_i**2))
+
+      f /= abs(sum(f.ravel())) # normalize
+      return f
+    elif order==1:
+      f = zeros( ( dim ) )
+      center = math.floor( dim / 2 )
+      for x in xrange( dim ):
+        f[x] = ( 1 if x <= center + dim_e and x >= center - dim_e else 0 ) * \
+            1.0 / (sigma_e*math.sqrt(2*pi)) * \
+            math.exp( -(x-center)**2  / (2*sigma_e**2)) - \
+            ( 1 if x <= center + dim_i and x >= center - dim_i else 0 ) * \
+            1.0 / (sigma_i*math.sqrt(2*pi)) * \
+            math.exp( -(x-center)**2  / (2*sigma_i**2))
+
+      f /= abs(sum(f.ravel())) # normalize
+      return f
+    else:
+      pass #TODO: put an error statement here
+  """ This one uses the Ratslam C++ gaussian formulas, which are not technically correct
   # builds a 3D difference of gaussians filter kernel with lengths of 'dim'
   def diff_gaussian( self, dim_e, dim_i, sigma_e, sigma_i, order=3 ):
     dim = max(dim_e, dim_i)
@@ -110,7 +166,23 @@ class PoseCellNetwork:
       return f
     else:
       pass #TODO: put an error statement here
+  """
+  # builds a 1D difference of gaussians filter kernel that can be used successively to create a 3D kernel
+  def diff_gaussian_separable( self, dim_e, dim_i, sigma_e, sigma_i ):
+    dim = max(dim_e, dim_i)
+    f = zeros( ( dim ) )
+    center = math.floor( dim / 2 )
+    for x in xrange( dim ):
+      f[x] = ( 1 if x <= center + dim_e and x >= center - dim_e else 0 ) * \
+          1.0 / (sigma_e*math.sqrt(2*pi)) * \
+          math.exp( -(x-center)**2  / (2*sigma_e**2)) - \
+          ( 1 if x <= center + dim_i and x >= center - dim_i else 0 ) * \
+          1.0 / (sigma_i*math.sqrt(2*pi)) * \
+          math.exp( -(x-center)**2  / (2*sigma_i**2))
 
+    f /= abs(sum(f.ravel())) # normalize
+    f = cbrt( f ) # Take the cubed root, so the filter applied 3 times will be normalized
+    return f
 
   def path_integration( self, vtrans, vrot ):
     vtrans /= self.pc_vtrans_scale
@@ -153,7 +225,28 @@ class PoseCellNetwork:
     # 2. Inter-Layer Update
 
     #input and output the same might not work
-    self.posecells = ndimage.correlate(self.posecells, self.kernel_3d, mode='wrap')
+    #self.posecells = ndimage.correlate(self.posecells, self.kernel_3d, mode='wrap')
+    self.posecells = self.conv.conv_im( self.posecells )
+    
+    #FIXME: get rid of this when done
+    #a = ndimage.correlate(self.posecells, self.kernel_3d, mode='wrap')
+    #b = self.conv.conv_im( self.posecells )
+    #c = ndimage.correlate1d( input=self.posecells, weights=self.kernel_1d.tolist(), axis=0, mode='wrap', origin=0 )
+    #c = ndimage.correlate1d( input=c, weights=self.kernel_1d.tolist(), axis=1, mode='wrap', origin=0 )
+    #c = ndimage.correlate1d( input=c, weights=self.kernel_1d.tolist(), axis=2, mode='wrap', origin=0 )
+    #c = ndimage.correlate1d( input=self.posecells, weights=self.kernel_1d_sep.tolist(), axis=0, mode='wrap', origin=0 )
+    #c = ndimage.correlate1d( input=c, weights=self.kernel_1d_sep.tolist(), axis=1, mode='wrap', origin=0 )
+    #c = ndimage.correlate1d( input=c, weights=self.kernel_1d_sep.tolist(), axis=2, mode='wrap', origin=0 )
+    #print "scipy",a
+    #print "opencl",b
+    #print "1D scipy",c
+
+    #print self.kernel_1d
+    #print self.kernel_2d
+    #print self.kernel_3d
+
+    #assert(array_equal(a,b))
+    #assert(array_equal(a,c))
 
     # 3. Global Inhibition
     self.posecells[self.posecells < self.global_inhibition] = 0

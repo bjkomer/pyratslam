@@ -22,6 +22,8 @@ from collections import deque
 import cProfile
 
 POSE_SIZE = ( 50, 50, 30 )
+#POSE_SIZE = ( 50, 50, 50 ) # FIXME: temp change to make it symmetric
+#POSE_SIZE = ( 5, 5, 5 ) # FIXME: temp change to make it symmetric
 IM_SIZE = ( 256, 256 ) #( 512, 512 )
 X_RANGE = ( 64, 192 ) #( 128, 384 )
 Y_RANGE = ( 64, 192 ) #( 128, 384 )

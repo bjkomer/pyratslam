@@ -5,9 +5,11 @@ import time
 from mako.template import Template
 from scipy import ndimage
 
+# Soon to be deprecated and replaced by ratslam/convolution.py
+# Still used for some arbitrary testing, but won't have all features
 
 class Convolution:
-  def __init__ ( self, im, fil, larger_buffer=False, sep=False ):
+  def __init__ ( self, im, fil, larger_buffer=False, sep=False, buffer_flip=False, type=numpy.float32 ):
     
     self.ctx = cl.create_some_context()
     self.queue = cl.CommandQueue( self.ctx )
@@ -20,6 +22,14 @@ class Convolution:
     self.fil = fil
     self.im_shape = im.shape
     self.sep = sep # whether or not the convolution is separated into 1D chunks
+    self.buffer_flip = buffer_flip # Optimization for separable convolutions where only the x direction is required
+    self.type = type
+    if self.type == numpy.float32:
+      self.ctype = 'float'
+    elif self.type == numpy.float64:
+      self.ctype = 'double'
+    else:
+      raise TypeError, "Data type specified is not currently supported: " + str( self.type )
 
     length = self.image_len
     
@@ -27,19 +37,19 @@ class Convolution:
     if larger_buffer:
       length = self.image_len + 2 * self.offset
       if self.dim == 1:
-        self.im = numpy.empty( ( length ), dtype=numpy.float32)
+        self.im = numpy.empty( ( length ), dtype=self.type)
         self.im[ self.offset : -self.offset ] = im
         self.im[ : self.offset ] = im[ -2 * self.offset : -self.offset ]
         self.im[ -self.offset : ] = im[ self.offset : 2 * self.offset ]
       elif self.dim == 2:
-        self.im = numpy.empty( ( length, length ), dtype=numpy.float32)
+        self.im = numpy.empty( ( length, length ), dtype=self.type)
         self.im[ self.offset : -self.offset, self.offset : - self.offset ] = im
         self.im[ : self.offset, :  ] = self.im[ length -2 * self.offset : length - self.offset, : ]
         self.im[ -self.offset :, : ] = self.im[ self.offset : 2 * self.offset, : ]
         self.im[ :, : self.offset  ] = self.im[ :, length - 2 * self.offset : length - self.offset ]
         self.im[ :, -self.offset : ] = self.im[ :, self.offset : 2 * self.offset ]
       elif self.dim == 3:
-        self.im = numpy.empty( ( length, length, length ), dtype=numpy.float32)
+        self.im = numpy.empty( ( length, length, length ), dtype=self.type)
         self.im[ self.offset : -self.offset, self.offset : - self.offset, self.offset : - self.offset ] = im
         self.im[ : self.offset, :, :  ] = self.im[ length -2 * self.offset : length - self.offset, :, : ]
         self.im[ -self.offset :, :, : ] = self.im[ self.offset : 2 * self.offset, :, : ]
@@ -55,7 +65,8 @@ class Convolution:
     self.textconf = { 'imsize' : length,
                       'filsize' : self.filter_len,
                       'filstart' : '- ' + str( self.offset ),  # in this format to remove the compiler warning
-                      'offset' : self.offset } # offset for the wrapping
+                      'offset' : self.offset, # offset for the wrapping
+                      'type' : self.ctype } # The data type in the numpy array, converted to C
 
     self.set_text()
 
@@ -75,11 +86,11 @@ class Convolution:
       if self.larger_buffer:
         if self.sep: # 2D Wrap Buffer Separable
           self.text = """
-        __kernel void conv_y(__global float* im, __global float* fil, __global float* out)
+        __kernel void conv_y(__global ${type}* im, __global ${type}* fil, __global ${type}* out)
         {
           unsigned int i = get_global_id(0);
           unsigned int j = get_global_id(1);
-          float sum = 0;
+          ${type} sum = 0;
           
           for ( unsigned int y = 0; y < ${filsize}; y++ ) {
             sum += im[ i + ( ${offset} + j + y ${filstart} ) * ${imsize} ] * \
@@ -88,11 +99,11 @@ class Convolution:
           out[ i + ( j + ${offset} ) * ${imsize} ] = sum;
         }
 
-        __kernel void conv_x(__global float* im, __global float* fil, __global float* out)
+        __kernel void conv_x(__global ${type}* im, __global ${type}* fil, __global ${type}* out)
         {
           unsigned int i = get_global_id(0);
           unsigned int j = get_global_id(1);
-          float sum = 0;
+          ${type} sum = 0;
           
           for ( unsigned int x = 0; x < ${filsize}; x++ ) {
             sum += im[ ( ${offset} + i + x ${filstart} ) + j * ${imsize} ] * \
@@ -103,11 +114,11 @@ class Convolution:
             """
         else:        # 2D Wrap Buffer
           self.text = """
-        __kernel void conv(__global float* im, __global float* fil, __global float* out)
+        __kernel void conv(__global ${type}* im, __global ${type}* fil, __global ${type}* out)
         {
           unsigned int i = get_global_id(0);
           unsigned int j = get_global_id(1);
-          float sum = 0;
+          ${type} sum = 0;
           
           for ( unsigned int x = 0; x < ${filsize}; x++ ) {
             for ( unsigned int y = 0; y < ${filsize}; y++ ) {
@@ -123,11 +134,11 @@ class Convolution:
           raise NotImplemented
         else:        # 2D Modulo
           self.text = """
-        __kernel void conv(__global float* im, __global float* fil, __global float* out)
+        __kernel void conv(__global ${type}* im, __global ${type}* fil, __global ${type}* out)
         {
           unsigned int i = get_global_id(0);
           unsigned int j = get_global_id(1);
-          float sum = 0;
+          ${type} sum = 0;
           
           for ( unsigned int x = 0; x < ${filsize}; x++ ) {
             for ( unsigned int y = 0; y < ${filsize}; y++ ) {
@@ -142,12 +153,12 @@ class Convolution:
       if self.larger_buffer:
         if self.sep: # 3D Wrap Buffer Separable
           self.text = """
-        __kernel void conv_z(__global float* im, __global float* fil, __global float* out)
+        __kernel void conv_z(__global ${type}* im, __global ${type}* fil, __global ${type}* out)
         {
           unsigned int i = get_global_id(0);
           unsigned int j = get_global_id(1);
           unsigned int k = get_global_id(2);
-          float sum = 0;
+          ${type} sum = 0;
           
           for ( unsigned int z = 0; z < ${filsize}; z++ ) {
             sum += im[ i + j * ${imsize} + ( ${offset} + k + z ${filstart} ) * ${imsize} * ${imsize} ] * \
@@ -156,12 +167,12 @@ class Convolution:
           out[ i + j * ${imsize} + ( k + ${offset} ) * ${imsize} * ${imsize} ] = sum;
         }
 
-        __kernel void conv_y(__global float* im, __global float* fil, __global float* out)
+        __kernel void conv_y(__global ${type}* im, __global ${type}* fil, __global ${type}* out)
         {
           unsigned int i = get_global_id(0);
           unsigned int j = get_global_id(1);
           unsigned int k = get_global_id(2);
-          float sum = 0;
+          ${type} sum = 0;
           
           for ( unsigned int y = 0; y < ${filsize}; y++ ) {
             sum += im[ i + ( ${offset} + j + y ${filstart} ) * ${imsize} + k * ${imsize} * ${imsize} ] * \
@@ -170,12 +181,12 @@ class Convolution:
           out[ i + ( j + ${offset} ) * ${imsize} + k * ${imsize} * ${imsize} ] = sum;
         }
 
-        __kernel void conv_x(__global float* im, __global float* fil, __global float* out)
+        __kernel void conv_x(__global ${type}* im, __global ${type}* fil, __global ${type}* out)
         {
           unsigned int i = get_global_id(0);
           unsigned int j = get_global_id(1);
           unsigned int k = get_global_id(2);
-          float sum = 0;
+          ${type} sum = 0;
           
           for ( unsigned int x = 0; x < ${filsize}; x++ ) {
             sum += im[ ( ${offset} + i + x ${filstart} ) + j * ${imsize} + k * ${imsize} * ${imsize} ] * \
@@ -186,12 +197,12 @@ class Convolution:
           """
         else:        # 3D Wrap Buffer
           self.text = """
-        __kernel void conv(__global float* im, __global float* fil, __global float* out)
+        __kernel void conv(__global ${type}* im, __global ${type}* fil, __global ${type}* out)
         {
           unsigned int i = get_global_id(0);
           unsigned int j = get_global_id(1);
           unsigned int k = get_global_id(2);
-          float sum = 0;
+          ${type} sum = 0;
           
           for ( unsigned int x = 0; x < ${filsize}; x++ ) {
             for ( unsigned int y = 0; y < ${filsize}; y++ ) {
@@ -231,7 +242,7 @@ class Convolution:
 
     raise NotImplemented
 
-  def execute( self, style='2D' ):
+  def execute( self ):
     
     print "image\n", self.im
     print "filter\n", self.fil
@@ -385,7 +396,7 @@ def main():
 
   #im = numpy.arange(100).reshape((10,10))
 
-  im_3d = numpy.random.randint( 10, size=( 100, 100, 100 ) ).astype( numpy.float32 )
+  im_3d = numpy.random.randint( 10, size=( 100, 100, 100 ) ).astype( numpy.float64 )
 
   fil_3d = numpy.ones( ( 10, 10, 10 ), dtype=numpy.float32 )
   fil_3d[2,2,2] = 2
@@ -395,17 +406,19 @@ def main():
   fil_2d[2,1] = 3
   fil_2d[2,2] = -1
 
-  fil_1d = numpy.ones( ( 10 ), dtype=numpy.float32 )
+  fil_1d = numpy.ones( ( 5 ), dtype=numpy.float64 )
   fil_1d[1] = 2
 
   #conv = Convolution( im=im_2d, fil=fil_2d, larger_buffer=True )
+  #conv = Convolution( im=im_2d, fil=fil_2d, larger_buffer=False )
   #conv = Convolution( im=im_2d, fil=fil_1d, larger_buffer=True, sep=True )
-  conv = Convolution( im=im_3d, fil=fil_1d, larger_buffer=True, sep=True )
+  #conv = Convolution( im=im_3d, fil=fil_1d, larger_buffer=True, sep=True )
+  conv = Convolution( im=im_3d, fil=fil_1d, larger_buffer=True, sep=True, type=numpy.float64 )
   #conv = Convolution( im=im_3d, fil=fil_3d, larger_buffer=True, sep=False )
   conv.build_program()
   conv.execute()
 
-  # RESULT: Convolution using pyopencl and separated into successive 1D filters is the fastest
+  # RESULT: Convolution using pyopencl and separated into successive 1D filters with larger buffers is the fastest
 
 if __name__ == "__main__":
   main()
