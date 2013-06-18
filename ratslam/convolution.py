@@ -8,7 +8,7 @@ from scipy import ndimage
 
 # TODO: Change the name, this does a correlation not a convolution! ( for symmetric filters it doesn't matter )
 class Convolution:
-  def __init__ ( self, im, fil, larger_buffer=True, sep=True, buffer_flip=False, type=numpy.float32 ):
+  def __init__( self, im, fil, fil_1d=None, fil_2d=None, larger_buffer=True, sep=True, buffer_flip=False, type=numpy.float32 ):
     
     self.ctx = cl.create_some_context()
     self.queue = cl.CommandQueue( self.ctx )
@@ -24,6 +24,10 @@ class Convolution:
     else:
       raise TypeError, "Data type specified is not currently supported: " + str( self.type )
 
+    # For special convolutions, if required
+    self.fil_1d = fil_1d
+    self.fil_2d = fil_2d
+    
     if im is not None and fil is not None:
       self.set_params( im, fil )
 
@@ -93,6 +97,13 @@ class Convolution:
     self.im_buf = cl.Buffer(self.ctx, mf.READ_ONLY | mf.COPY_HOST_PTR, hostbuf=self.im)
     self.fil_buf = cl.Buffer(self.ctx, mf.READ_ONLY | mf.COPY_HOST_PTR, hostbuf=self.fil)
     self.dest_buf = cl.Buffer(self.ctx, mf.WRITE_ONLY, self.im.nbytes)
+    
+    # Create the buffers for the specific cases where lower dimensional filters are used on high dimensional images
+    # These are pretty specific to pyratslam
+    if self.fil_1d is not None:
+      self.fil_1d_buf = cl.Buffer(self.ctx, mf.READ_ONLY | mf.COPY_HOST_PTR, hostbuf=self.fil_1d)
+    if self.fil_2d is not None:
+      self.fil_2d_buf = cl.Buffer(self.ctx, mf.READ_ONLY | mf.COPY_HOST_PTR, hostbuf=self.fil_2d)
     
     if self.dim == 1:
       raise NotImplemented
@@ -230,6 +241,45 @@ class Convolution:
           }
           out[ ${offset} + k + ( j + ${offset} ) * ${len_z} + ( i + ${offset} ) * ${len_z} * ${len_y} ] = sum;
         }
+        
+        // This does a 2D convolution across a 3D image (each plane is independent)
+        // fil must be 2D and im must be 3D
+        __kernel void conv_xy(__global ${type}* im, __global ${type}* fil, __global ${type}* out)
+        {
+          unsigned int i = get_global_id(0);
+          unsigned int j = get_global_id(1);
+          unsigned int k = get_global_id(2);
+          ${type} sum = 0;
+          
+          for ( unsigned int x = 0; x < ${filsize}; x++ ) {
+            for ( unsigned int y = 0; y < ${filsize}; y++ ) {
+              sum += im[ ( ${offset} + k ) + \
+                         ( ${offset} + j + y ${filstart} ) * ${len_z} + \
+                         ( ${offset} + i + x ${filstart} ) * ${len_z} * ${len_y} ] * \
+                     fil[ y + x * ${filsize} ];
+            }
+          }
+          out[ ${offset} + k + ( j + ${offset} ) * ${len_z} + ( i + ${offset} ) * ${len_z} * ${len_y} ] = sum;
+        }
+        
+        // This does a 1D convolution across a 3D image (each line is independent)
+        // fil must be 1D and im must be 3D
+        __kernel void conv_z(__global ${type}* im, __global ${type}* fil, __global ${type}* out)
+        {
+          unsigned int i = get_global_id(0);
+          unsigned int j = get_global_id(1);
+          unsigned int k = get_global_id(2);
+          ${type} sum = 0;
+          
+          for ( unsigned int z = 0; z < ${filsize}; z++ ) {
+            sum += im[ ( ${offset} + k + z ${filstart} ) + \
+                       ( ${offset} + j ) * ${len_z} + \
+                       ( ${offset} + i ) * ${len_z} * ${len_y} ] * \
+                   fil[ z ];
+          }
+          
+          out[ ${offset} + k + ( j + ${offset} ) * ${len_z} + ( i + ${offset} ) * ${len_z} * ${len_y} ] = sum;
+        }
           """
       else:
         if self.sep: # 3D Modulo Separable
@@ -254,47 +304,88 @@ class Convolution:
 
     raise NotImplemented
 
-  def conv_im( self, im ):
-    """Does the convolution on a new image provided, using the original filter and parameters"""
+  def conv_im( self, im, axes=-1 ):
+    """Does the convolution on a new image provided, using the original filter and parameters. 
+       If axis parameter is specified (in the form of a list), the convolution will only be lower 
+       dimensional and only done along specific axes. This parameter is only read if sep=True"""
 
     self.replace_image( im )
-    return self.execute()
+    return self.execute( axes )
 
-  def execute( self ):
+  def execute( self, axes=-1 ):
     if self.sep:
       if self.dim == 1:
         self.program.conv_x( self.queue, self.im_shape, None, self.im_buf, self.fil_buf, self.dest_buf )
         out = numpy.empty_like( self.im )
         cl.enqueue_read_buffer( self.queue, self.dest_buf, out ).wait()
       elif self.dim == 2:
-        shape_x = self.im_shape
-        shape_y = self.im_shape
-        if self.larger_buffer: # need to modify the shape of the kernels slightly to account for wrapping
-          shape_x = ( self.im_shape[0], self.im_shape[1] + 2 * self.offset )
-          shape_y = ( self.im_shape[0] + 2 * self.offset, self.im_shape[1] )
-
-        self.program.conv_x( self.queue, shape_x, None, self.im_buf, self.fil_buf, self.dest_buf )
-        self.program.conv_y( self.queue, shape_y, None, self.dest_buf, self.fil_buf, self.im_buf )
+        shape_x = ( self.im_shape[0], self.buf_shape[1] )
+        shape_y = ( self.buf_shape[0], self.im_shape[1] )
         out = numpy.empty_like( self.im )
-        cl.enqueue_read_buffer( self.queue, self.im_buf, out ).wait()
-      elif self.dim == 3:
-        shape_x = self.im_shape
-        shape_y = self.im_shape
-        shape_z = self.im_shape
-        if self.larger_buffer: # need to modify the shape of the kernels slightly to account for wrapping
-          shape_x = ( self.im_shape[0], self.im_shape[1] + 2 * self.offset, self.im_shape[2] + 2 * self.offset )
-          shape_y = ( self.im_shape[0] + 2 * self.offset, self.im_shape[1], self.im_shape[2] + 2 * self.offset )
-          shape_z = ( self.im_shape[0] + 2 * self.offset, self.im_shape[1] + 2 * self.offset, self.im_shape[2] )
+        if axes == -1 or ( 0 in axes and 1 in axes ):
+          self.program.conv_x( self.queue, shape_x, None, self.im_buf, self.fil_buf, self.dest_buf )
+          self.program.conv_y( self.queue, shape_y, None, self.dest_buf, self.fil_buf, self.im_buf )
+          cl.enqueue_read_buffer( self.queue, self.im_buf, out ).wait()
+        elif 0 in axes:
+          self.program.conv_x( self.queue, shape_x, None, self.im_buf, self.fil_buf, self.dest_buf )
+          cl.enqueue_read_buffer( self.queue, self.dest_buf, out ).wait()
+        elif 1 in axes:
+          self.program.conv_y( self.queue, shape_y, None, self.im_buf, self.fil_buf, self.dest_buf )
+          cl.enqueue_read_buffer( self.queue, self.dest_buf, out ).wait()
+        else:
+          out = self.im
 
-        self.program.conv_x( self.queue, shape_x, None, self.im_buf, self.fil_buf, self.dest_buf )
-        self.program.conv_y( self.queue, shape_y, None, self.dest_buf, self.fil_buf, self.im_buf )
-        self.program.conv_z( self.queue, shape_z, None, self.im_buf, self.fil_buf, self.dest_buf )
+      elif self.dim == 3:
+        shape_x = ( self.im_shape[0], self.buf_shape[1], self.buf_shape[2] )
+        shape_y = ( self.buf_shape[0], self.im_shape[1], self.buf_shape[2] )
+        shape_z = ( self.buf_shape[0], self.buf_shape[1], self.im_shape[2] )
+        out = numpy.empty_like( self.im )
+        if axes == -1 or ( 0 in axes and 1 in axes and 2 in axes ):
+          self.program.conv_x( self.queue, shape_x, None, self.im_buf, self.fil_buf, self.dest_buf )
+          self.program.conv_y( self.queue, shape_y, None, self.dest_buf, self.fil_buf, self.im_buf )
+          self.program.conv_z( self.queue, shape_z, None, self.im_buf, self.fil_buf, self.dest_buf )
+          cl.enqueue_read_buffer( self.queue, self.dest_buf, out ).wait()
+        elif ( 0 in axes and 1 in axes ):
+          self.program.conv_x( self.queue, shape_x, None, self.im_buf, self.fil_buf, self.dest_buf )
+          self.program.conv_y( self.queue, shape_y, None, self.dest_buf, self.fil_buf, self.im_buf )
+          cl.enqueue_read_buffer( self.queue, self.im_buf, out ).wait()
+        elif ( 1 in axes and 2 in axes ):
+          self.program.conv_y( self.queue, shape_y, None, self.im_buf, self.fil_buf, self.dest_buf )
+          self.program.conv_z( self.queue, shape_z, None, self.dest_buf, self.fil_buf, self.im_buf )
+          cl.enqueue_read_buffer( self.queue, self.im_buf, out ).wait()
+        elif ( 0 in axes and 2 in axes ):
+          self.program.conv_x( self.queue, shape_x, None, self.im_buf, self.fil_buf, self.dest_buf )
+          self.program.conv_z( self.queue, shape_z, None, self.dest_buf, self.fil_buf, self.im_buf )
+          cl.enqueue_read_buffer( self.queue, self.im_buf, out ).wait()
+        elif 0 in axes:
+          self.program.conv_x( self.queue, shape_x, None, self.im_buf, self.fil_buf, self.dest_buf )
+          cl.enqueue_read_buffer( self.queue, self.dest_buf, out ).wait()
+        elif 1 in axes:
+          self.program.conv_y( self.queue, shape_y, None, self.im_buf, self.fil_buf, self.dest_buf )
+          cl.enqueue_read_buffer( self.queue, self.dest_buf, out ).wait()
+        elif 2 in axes:
+          self.program.conv_z( self.queue, shape_z, None, self.im_buf, self.fil_buf, self.dest_buf )
+          cl.enqueue_read_buffer( self.queue, self.dest_buf, out ).wait()
+        else:
+          out = self.im
+    else:
+      if axes == -1 or len( axes ) == self.dim:
+        self.program.conv( self.queue, self.im_shape, None, self.im_buf, self.fil_buf, self.dest_buf )
         out = numpy.empty_like( self.im )
         cl.enqueue_read_buffer( self.queue, self.dest_buf, out ).wait()
-    else:
-      self.program.conv( self.queue, self.im_shape, None, self.im_buf, self.fil_buf, self.dest_buf )
-      out = numpy.empty_like( self.im )
-      cl.enqueue_read_buffer( self.queue, self.dest_buf, out ).wait()
+      elif self.dim == 1:
+        raise TypeError, "Invalid Parameters"
+      elif self.dim == 2:
+        raise NotImplemented, "2D lower dimensional convolution not supported yet"
+      elif self.dim == 3:
+        if 0 in axes and 1 in axes: # 2D convolution on each xy plane
+          self.program.conv_xy( self.queue, self.im_shape, None, self.im_buf, self.fil_2d_buf, self.dest_buf )
+          out = numpy.empty_like( self.im )
+          cl.enqueue_read_buffer( self.queue, self.dest_buf, out ).wait()
+        elif axes == [ 2 ]: # 1D convolution across each z line
+          self.program.conv_z( self.queue, self.im_shape, None, self.im_buf, self.fil_1d_buf, self.dest_buf )
+          out = numpy.empty_like( self.im )
+          cl.enqueue_read_buffer( self.queue, self.dest_buf, out ).wait()
     #""" disable this block for debugging
     if self.larger_buffer:
       if self.dim == 1:
@@ -306,22 +397,61 @@ class Convolution:
     #"""
     return out
 
-  def replace_filter( self, fil ):
+  def replace_filter( self, fil, dim=None ):
     """Replaces the currently loaded filter with a new one, must be the same size"""
 
-    if self.fil.shape == fil.shape and self.fil.dtype == fil.dtype:
-      self.fil = fil
-      #TODO: this might not be needed
+    if dim is None:
+      if self.fil.shape == fil.shape and self.fil.dtype == fil.dtype:
+        self.fil = fil
+        #TODO: this might not be needed
+        mf = cl.mem_flags  
+        self.fil_buf = cl.Buffer(self.ctx, mf.READ_ONLY | mf.COPY_HOST_PTR, hostbuf=self.fil)
+      else:
+        raise TypeError, "Filter must match old filter in shape and type. Old filter is of type " + \
+            str( self.fil.dtype) + " and shape " + str( self.fil.shape ) + ", while new filter is of type " + \
+            str( fil.dtype ) + " and shape " + str( fil.shape ) + ". To change shape/type, use new_filter()"
+    elif dim == 1 and fil.ndim == 1:
+      self.fil_1d = fil
       mf = cl.mem_flags  
-      self.fil_buf = cl.Buffer(self.ctx, mf.READ_ONLY | mf.COPY_HOST_PTR, hostbuf=self.fil)
+      self.fil_1d_buf = cl.Buffer(self.ctx, mf.READ_ONLY | mf.COPY_HOST_PTR, hostbuf=self.fil_1d)
+    elif dim == 2 and fil.ndim == 2:
+      self.fil_2d = fil
+      mf = cl.mem_flags  
+      self.fil_2d_buf = cl.Buffer(self.ctx, mf.READ_ONLY | mf.COPY_HOST_PTR, hostbuf=self.fil_2d)
+    elif dim == 3 and fil.ndim == 3:
+      raise NotImplemented
     else:
-      raise TypeError, "Filter must match old filter in shape and type. Old filter is of type " + \
-          str( self.fil.dtype) + " and shape " + str( self.fil.shape ) + ", while new filter is of type " + \
-          str( fil.dtype ) + " and shape " + str( fil.shape ) + ". To change shape/type, use new_filter()" 
+      raise TypeError, "Incorrect Parameters"
   
-  def new_filter( self, fil ):
-    """Replaces the currently loaded filter with a new one, and updates the buffers and opencl program accordingly"""
-    raise NotImplemented
+  def new_filter( self, fil, dim=None ):
+    """Replaces the currently loaded filter with a new one, and updates the buffers and opencl program accordingly.
+       If dim is specified, the filter will be saved separately for use in lower dimensional convolutions.
+       For example, a 2D convolution on a 3D image"""
+    if dim is None:
+      if self.fil.shape == fil.shape and self.fil.dtype == fil.dtype:
+        replace_filter( fil )
+      else:
+        raise NotImplemented #TODO: need to resize buffers here
+    elif dim == 1 and fil.ndim == 1:
+      if self.fil_1d is not None and self.fil_1d.shape == fil.shape:
+        replace_filter( fil, dim )
+      else:
+        # TODO: may need sizing change stuff here later
+        self.fil_1d = fil
+        mf = cl.mem_flags  
+        self.fil_1d_buf = cl.Buffer(self.ctx, mf.READ_ONLY | mf.COPY_HOST_PTR, hostbuf=self.fil_1d)
+    elif dim == 2 and fil.ndim == 2:
+      if self.fil_2d is not None and self.fil_2d.shape == fil.shape:
+        replace_filter( fil, dim )
+      else:
+        # TODO: may need sizing change stuff here later
+        self.fil_2d = fil
+        mf = cl.mem_flags  
+        self.fil_2d_buf = cl.Buffer(self.ctx, mf.READ_ONLY | mf.COPY_HOST_PTR, hostbuf=self.fil_2d)
+    elif dim == 3 and fil.ndim == 3:
+      raise NotImplemented
+    else:
+      raise TypeError, "Incorrect Parameters"
   
   # TODO: needs to support non-symmetrical images
   def replace_image( self, im ):

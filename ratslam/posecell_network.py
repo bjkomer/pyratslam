@@ -227,26 +227,6 @@ class PoseCellNetwork:
     #input and output the same might not work
     #self.posecells = ndimage.correlate(self.posecells, self.kernel_3d, mode='wrap')
     self.posecells = self.conv.conv_im( self.posecells )
-    
-    #FIXME: get rid of this when done
-    #a = ndimage.correlate(self.posecells, self.kernel_3d, mode='wrap')
-    #b = self.conv.conv_im( self.posecells )
-    #c = ndimage.correlate1d( input=self.posecells, weights=self.kernel_1d.tolist(), axis=0, mode='wrap', origin=0 )
-    #c = ndimage.correlate1d( input=c, weights=self.kernel_1d.tolist(), axis=1, mode='wrap', origin=0 )
-    #c = ndimage.correlate1d( input=c, weights=self.kernel_1d.tolist(), axis=2, mode='wrap', origin=0 )
-    #c = ndimage.correlate1d( input=self.posecells, weights=self.kernel_1d_sep.tolist(), axis=0, mode='wrap', origin=0 )
-    #c = ndimage.correlate1d( input=c, weights=self.kernel_1d_sep.tolist(), axis=1, mode='wrap', origin=0 )
-    #c = ndimage.correlate1d( input=c, weights=self.kernel_1d_sep.tolist(), axis=2, mode='wrap', origin=0 )
-    #print "scipy",a
-    #print "opencl",b
-    #print "1D scipy",c
-
-    #print self.kernel_1d
-    #print self.kernel_2d
-    #print self.kernel_3d
-
-    #assert(array_equal(a,b))
-    #assert(array_equal(a,c))
 
     # 3. Global Inhibition
     self.posecells[self.posecells < self.global_inhibition] = 0
