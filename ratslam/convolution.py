@@ -57,7 +57,7 @@ class Convolution:
         self.im[ -self.offset :, : ] = self.im[ self.offset : 2 * self.offset, : ]
         self.im[ :, : self.offset  ] = self.im[ :, -2 * self.offset : -self.offset ]
         self.im[ :, -self.offset : ] = self.im[ :, self.offset : 2 * self.offset ]
-        self.textconf['len_x'] = self.buf_shape[0]
+        self.textconf['len_y'] = self.buf_shape[1]
       elif self.dim == 3:
         self.buf_shape = ( self.im_shape[0] + 2 * self.offset, 
                            self.im_shape[1] + 2 * self.offset, 
@@ -70,14 +70,20 @@ class Convolution:
         self.im[ :, -self.offset :, : ] = self.im[ :, self.offset : 2 * self.offset, : ]
         self.im[ :, :, : self.offset  ] = self.im[ :, :, -2 * self.offset : -self.offset ]
         self.im[ :, :, -self.offset : ] = self.im[ :, :, self.offset : 2 * self.offset ]
-        self.textconf['len_x'] = self.buf_shape[0]
         self.textconf['len_y'] = self.buf_shape[1]
+        self.textconf['len_z'] = self.buf_shape[2]
     else:
       self.im = im
       self.buf_shape = self.im_shape # buf_shape will be larger if a larger buffer is used for wrapping
+      if self.dim == 2:
+        self.textconf['len_y'] = self.buf_shape[1]
+      elif self.dim == 3:
+        self.textconf['len_y'] = self.buf_shape[1]
+        self.textconf['len_z'] = self.buf_shape[2]
 
     self.set_text()
 
+  #NOTE: OpenCL seems to flip the x and z axis from the intuitive representation, keep this in mind when coding
   def set_text( self ):
     """Allows setup of different methods of convolution"""
     
@@ -94,19 +100,6 @@ class Convolution:
       if self.larger_buffer:
         if self.sep: # 2D Wrap Buffer Separable
           self.text = """
-        __kernel void conv_y(__global ${type}* im, __global ${type}* fil, __global ${type}* out)
-        {
-          unsigned int i = get_global_id(0);
-          unsigned int j = get_global_id(1);
-          ${type} sum = 0;
-          
-          for ( unsigned int y = 0; y < ${filsize}; y++ ) {
-            sum += im[ i + ( ${offset} + j + y ${filstart} ) * ${len_x} ] * \
-                   fil[ y ];
-          }
-          out[ i + ( j + ${offset} ) * ${len_x} ] = sum;
-        }
-
         __kernel void conv_x(__global ${type}* im, __global ${type}* fil, __global ${type}* out)
         {
           unsigned int i = get_global_id(0);
@@ -114,10 +107,23 @@ class Convolution:
           ${type} sum = 0;
           
           for ( unsigned int x = 0; x < ${filsize}; x++ ) {
-            sum += im[ ( ${offset} + i + x ${filstart} ) + j * ${len_x} ] * \
+            sum += im[ j + ( ${offset} + i + x ${filstart} ) * ${len_y} ] * \
                    fil[ x ];
           }
-          out[ ${offset} + i + j * ${len_x} ] = sum;
+          out[ j + ( i + ${offset} ) * ${len_y} ] = sum;
+        }
+
+        __kernel void conv_y(__global ${type}* im, __global ${type}* fil, __global ${type}* out)
+        {
+          unsigned int i = get_global_id(0);
+          unsigned int j = get_global_id(1);
+          ${type} sum = 0;
+          
+          for ( unsigned int y = 0; y < ${filsize}; y++ ) {
+            sum += im[ ( ${offset} + j + y ${filstart} ) + i * ${len_y} ] * \
+                   fil[ y ];
+          }
+          out[ ${offset} + j + i * ${len_y} ] = sum;
         }
             """
         else:        # 2D Wrap Buffer
@@ -130,11 +136,11 @@ class Convolution:
           
           for ( unsigned int x = 0; x < ${filsize}; x++ ) {
             for ( unsigned int y = 0; y < ${filsize}; y++ ) {
-              sum += im[ ( ${offset} + i + x ${filstart} ) + ( ${offset} + j + y ${filstart} ) * ${len_x} ] * \
-                     fil[ x + y * ${filsize} ];
+              sum += im[ ( ${offset} + j + y ${filstart} ) + ( ${offset} + i + x ${filstart} ) * ${len_y} ] * \
+                     fil[ y + x * ${filsize} ];
             }
           }
-          out[ ${offset} + i + ( j + ${offset} ) * ${len_x} ] = sum;
+          out[ ${offset} + j + ( i + ${offset} ) * ${len_y} ] = sum;
         }
           """
       else:
@@ -150,29 +156,29 @@ class Convolution:
           
           for ( unsigned int x = 0; x < ${filsize}; x++ ) {
             for ( unsigned int y = 0; y < ${filsize}; y++ ) {
-              sum += im[ ( i + x ${filstart} ) % ${len_x} + ( ( j + y ${filstart} ) % ${len_x} ) * ${len_x} ] * \
-                     fil[ x + y * ${filsize} ];
+              sum += im[ ( j + y ${filstart} ) % ${len_y} + ( ( i + x ${filstart} ) % ${len_y} ) * ${len_y} ] * \
+                     fil[ y + x * ${filsize} ];
             }
           }
-          out[ i + j * ${len_x} ] = sum;
+          out[ j + i * ${len_x} ] = sum;
         }
           """
     elif self.dim == 3:
       if self.larger_buffer:
         if self.sep: # 3D Wrap Buffer Separable
           self.text = """
-        __kernel void conv_z(__global ${type}* im, __global ${type}* fil, __global ${type}* out)
+        __kernel void conv_x(__global ${type}* im, __global ${type}* fil, __global ${type}* out)
         {
           unsigned int i = get_global_id(0);
           unsigned int j = get_global_id(1);
           unsigned int k = get_global_id(2);
           ${type} sum = 0;
           
-          for ( unsigned int z = 0; z < ${filsize}; z++ ) {
-            sum += im[ i + j * ${len_x} + ( ${offset} + k + z ${filstart} ) * ${len_x} * ${len_y} ] * \
-                   fil[ z ];
+          for ( unsigned int x = 0; x < ${filsize}; x++ ) {
+            sum += im[ k + j * ${len_z} + ( ${offset} + i + x ${filstart} ) * ${len_z} * ${len_y} ] * \
+                   fil[ x ];
           }
-          out[ i + j * ${len_x} + ( k + ${offset} ) * ${len_x} * ${len_y} ] = sum;
+          out[ k + j * ${len_z} + ( i + ${offset} ) * ${len_z} * ${len_y} ] = sum;
         }
 
         __kernel void conv_y(__global ${type}* im, __global ${type}* fil, __global ${type}* out)
@@ -183,24 +189,24 @@ class Convolution:
           ${type} sum = 0;
           
           for ( unsigned int y = 0; y < ${filsize}; y++ ) {
-            sum += im[ i + ( ${offset} + j + y ${filstart} ) * ${len_x} + k * ${len_x} * ${len_y} ] * \
+            sum += im[ k + ( ${offset} + j + y ${filstart} ) * ${len_z} + i * ${len_z} * ${len_y} ] * \
                    fil[ y ];
           }
-          out[ i + ( j + ${offset} ) * ${len_x} + k * ${len_x} * ${len_y} ] = sum;
+          out[ k + ( j + ${offset} ) * ${len_z} + i * ${len_z} * ${len_y} ] = sum;
         }
 
-        __kernel void conv_x(__global ${type}* im, __global ${type}* fil, __global ${type}* out)
+        __kernel void conv_z(__global ${type}* im, __global ${type}* fil, __global ${type}* out)
         {
           unsigned int i = get_global_id(0);
           unsigned int j = get_global_id(1);
           unsigned int k = get_global_id(2);
           ${type} sum = 0;
           
-          for ( unsigned int x = 0; x < ${filsize}; x++ ) {
-            sum += im[ ( ${offset} + i + x ${filstart} ) + j * ${len_x} + k * ${len_x} * ${len_y} ] * \
-                   fil[ x ];
+          for ( unsigned int z = 0; z < ${filsize}; z++ ) {
+            sum += im[ ( ${offset} + k + z ${filstart} ) + j * ${len_z} + i * ${len_z} * ${len_y} ] * \
+                   fil[ z ];
           }
-          out[ ${offset} + i + j * ${len_x} + k * ${len_x} * ${len_y} ] = sum;
+          out[ ${offset} + k + j * ${len_z} + i * ${len_z} * ${len_y} ] = sum;
         }
           """
         else:        # 3D Wrap Buffer
@@ -212,17 +218,17 @@ class Convolution:
           unsigned int k = get_global_id(2);
           ${type} sum = 0;
           
-          for ( unsigned int z = 0; z < ${filsize}; z++ ) {
+          for ( unsigned int x = 0; x < ${filsize}; x++ ) {
             for ( unsigned int y = 0; y < ${filsize}; y++ ) {
-              for ( unsigned int x = 0; x < ${filsize}; x++ ) {
-                sum += im[ ( ${offset} + i + x ${filstart} ) + \
-                           ( ${offset} + j + y ${filstart} ) * ${len_x} + \
-                           ( ${offset} + k + z ${filstart} ) * ${len_x} * ${len_y} ] * \
-                       fil[ x + y * ${filsize} + z * ${filsize} * ${filsize} ];
+              for ( unsigned int z = 0; z < ${filsize}; z++ ) {
+                sum += im[ ( ${offset} + k + z ${filstart} ) + \
+                           ( ${offset} + j + y ${filstart} ) * ${len_z} + \
+                           ( ${offset} + i + x ${filstart} ) * ${len_z} * ${len_y} ] * \
+                       fil[ z + y * ${filsize} + x * ${filsize} * ${filsize} ];
               }
             }
           }
-          out[ ${offset} + i + ( j + ${offset} ) * ${len_x} + ( k + ${offset} ) * ${len_x} * ${len_y} ] = sum;
+          out[ ${offset} + k + ( j + ${offset} ) * ${len_z} + ( i + ${offset} ) * ${len_z} * ${len_y} ] = sum;
         }
           """
       else:
@@ -255,7 +261,6 @@ class Convolution:
     return self.execute()
 
   def execute( self ):
-    
     if self.sep:
       if self.dim == 1:
         self.program.conv_x( self.queue, self.im_shape, None, self.im_buf, self.fil_buf, self.dest_buf )
