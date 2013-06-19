@@ -429,12 +429,12 @@ class Convolution:
        For example, a 2D convolution on a 3D image"""
     if dim is None:
       if self.fil.shape == fil.shape and self.fil.dtype == fil.dtype:
-        replace_filter( fil )
+        self.replace_filter( fil )
       else:
         raise NotImplemented #TODO: need to resize buffers here
     elif dim == 1 and fil.ndim == 1:
       if self.fil_1d is not None and self.fil_1d.shape == fil.shape:
-        replace_filter( fil, dim )
+        self.replace_filter( fil, dim )
       else:
         # TODO: may need sizing change stuff here later
         self.fil_1d = fil
@@ -442,7 +442,7 @@ class Convolution:
         self.fil_1d_buf = cl.Buffer(self.ctx, mf.READ_ONLY | mf.COPY_HOST_PTR, hostbuf=self.fil_1d)
     elif dim == 2 and fil.ndim == 2:
       if self.fil_2d is not None and self.fil_2d.shape == fil.shape:
-        replace_filter( fil, dim )
+        self.replace_filter( fil, dim )
       else:
         # TODO: may need sizing change stuff here later
         self.fil_2d = fil

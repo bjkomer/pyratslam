@@ -39,7 +39,7 @@ class PoseCellNetwork:
   # builds a 3D gaussian filter kernel with lengths of 'dim'
   def build_kernel( self, dim, sigma, order=3 ):
     if order==3:
-      f = zeros( ( dim, dim, dim ) )
+      f = empty( ( dim, dim, dim ) )
       center = math.floor( dim / 2 )
       for x in xrange( dim ):
         for y in xrange( dim ):
@@ -50,7 +50,7 @@ class PoseCellNetwork:
       f /= abs(sum(f.ravel())) # normalize
       return f
     elif order==2:
-      f = zeros( ( dim, dim ) )
+      f = empty( ( dim, dim ) )
       center = math.floor( dim / 2 )
       for x in xrange( dim ):
         for y in xrange( dim ):
@@ -60,7 +60,7 @@ class PoseCellNetwork:
       f /= abs(sum(f.ravel())) # normalize
       return f
     elif order==1:
-      f = zeros( ( dim ) )
+      f = empty( ( dim ) )
       center = math.floor( dim / 2 )
       for x in xrange( dim ):
           f[x] = 1.0 / (sigma*math.sqrt(2*pi)) * \
@@ -75,7 +75,7 @@ class PoseCellNetwork:
   def diff_gaussian( self, dim_e, dim_i, sigma_e, sigma_i, order=3 ):
     dim = max(dim_e, dim_i)
     if order==3:
-      f = zeros( ( dim, dim, dim ) )
+      f = empty( ( dim, dim, dim ) )
       center = math.floor( dim / 2 )
       for x in xrange( dim ):
         for y in xrange( dim ):
@@ -90,7 +90,7 @@ class PoseCellNetwork:
       f /= abs(sum(f.ravel())) # normalize
       return f
     elif order==2:
-      f = zeros( ( dim, dim ) )
+      f = empty( ( dim, dim ) )
       center = math.floor( dim / 2 )
       for x in xrange( dim ):
         for y in xrange( dim ):
@@ -104,7 +104,7 @@ class PoseCellNetwork:
       f /= abs(sum(f.ravel())) # normalize
       return f
     elif order==1:
-      f = zeros( ( dim ) )
+      f = empty( ( dim ) )
       center = math.floor( dim / 2 )
       for x in xrange( dim ):
         f[x] = ( 1 if x <= center + dim_e and x >= center - dim_e else 0 ) * \
@@ -167,10 +167,11 @@ class PoseCellNetwork:
     else:
       pass #TODO: put an error statement here
   """
+  # FIXME: this doesn't actually work at all, because DoG filters are not separable
   # builds a 1D difference of gaussians filter kernel that can be used successively to create a 3D kernel
   def diff_gaussian_separable( self, dim_e, dim_i, sigma_e, sigma_i ):
     dim = max(dim_e, dim_i)
-    f = zeros( ( dim ) )
+    f = empty( ( dim ) )
     center = math.floor( dim / 2 )
     for x in xrange( dim ):
       f[x] = ( 1 if x <= center + dim_e and x >= center - dim_e else 0 ) * \
@@ -184,6 +185,33 @@ class PoseCellNetwork:
     f = cbrt( f ) # Take the cubed root, so the filter applied 3 times will be normalized
     return f
 
+  def diff_gaussian_offset_2d( self, sigma_e, sigma_i, size=( 7, 7 ), origin=( 0, 0 ) ):
+    """Builds a 2D difference of gaussian kernel centered at the origin given"""
+    f = empty( size )
+    x, y = meshgrid( arange( size[0] ) - origin[0], arange( size[1] ) - origin[1] )
+    center = ( math.floor( size[0] / 2 ), math.floor( size[1] / 2 ) )
+    f = 1.0 / ( 2* sigma_e**2 * pi ) * \
+        exp( (-( x - center[0])**2 - (y - center[1])**2 ) / (2*sigma_e**2)) - \
+        1.0 / ( 2 * sigma_i**2 * pi ) * \
+        exp( (-( x - center[0])**2 - (y - center[1])**2 ) / (2*sigma_i**2))
+    f /= abs(sum(f.ravel())) # normalize
+    #f = square( cbrt( f ) ) # The result of this filter and a 1D filter should be normalized
+    return f
+
+  def diff_gaussian_offset_1d( self, sigma_e, sigma_i, size=7, origin=0 ):
+    """Builds a 1D difference of gaussian kernel centered at the origin given"""
+    f = empty( size )
+    x = arange( size ) - origin
+    center = math.floor( size / 2 )
+    f = 1.0 / (sigma_e*math.sqrt(2*pi)) * \
+        exp( -square(x-center)  / (2*sigma_e**2)) - \
+        1.0 / (sigma_i*math.sqrt(2*pi)) * \
+        exp( -square(x-center)  / (2*sigma_i**2))
+    f /= abs(sum(f.ravel())) # normalize
+    f = cbrt( f ) # The result of this filter and a 2D filter should be normalized
+    return f
+
+
   def path_integration( self, vtrans, vrot ):
     vtrans /= self.pc_vtrans_scale
     vrot /= self.pc_vrot_scale #TODO ?? is this right? 
@@ -193,16 +221,34 @@ class PoseCellNetwork:
     for dir_pc in xrange( self.shape[2] ):
       # use a 2D gaussian filter across every theta (direction) layer, with the origin offset based on vtrans and vrot
       origin = ( vtrans*cos( (dir_pc - mid)*self.pc_vrot_scale ), vtrans*sin( (dir_pc - mid)*self.pc_vrot_scale ) )
+      ####print origin
+      filter = self.diff_gaussian_offset_2d( PC_E_SIGMA, PC_I_SIGMA, size=(7,7), origin=origin )
+      #filter = self.diff_gaussian_offset_2d( PC_E_SIGMA, PC_I_SIGMA, size=(15,15), origin=origin )
+      #filter = self.diff_gaussian_offset_2d( PC_E_SIGMA, PC_I_SIGMA, size=(7,7), origin=(0,0) )
+      #self.conv.new_filter( filter, dim=2 )
+      #self.posecells = self.conv.conv_im( self.posecells, axes=[0,1] )
+      
+      # Using origin shifted filter
       self.posecells[:,:,dir_pc] = \
-          ndimage.correlate( self.posecells[:,:,dir_pc], self.kernel_2d, mode='wrap', origin=origin )
+          ndimage.correlate( self.posecells[:,:,dir_pc], filter, mode='wrap' )
+      
+      #self.posecells[:,:,dir_pc] = \
+      #    ndimage.correlate( self.posecells[:,:,dir_pc], self.kernel_2d, mode='wrap', origin=origin )
+    
     # Remove any negative values
     self.posecells[self.posecells < 0] = 0
+    
     # and then use a 1D gaussian across the theta layers
     #TODO - this can be optimized better in the future
     origin = math.floor(vrot+.5)
-    for x in xrange( self.shape[0] ):
-      for y in xrange( self.shape[1] ):
-        self.posecells[x,y,:] = ndimage.correlate( self.posecells[x,y,:], self.kernel_1d, mode='wrap', origin=origin )
+    #for x in xrange( self.shape[0] ):
+    #  for y in xrange( self.shape[1] ):
+    #    self.posecells[x,y,:] = ndimage.correlate( self.posecells[x,y,:], self.kernel_1d, mode='wrap', origin=origin )
+    filter = self.diff_gaussian_offset_1d( PC_E_SIGMA, PC_I_SIGMA, size=7, origin=origin )
+    self.conv.new_filter( filter, dim=1 )
+    self.posecells = self.conv.conv_im( self.posecells, axes=[2] )
+    #self.posecells = ndimage.correlate1d(input=self.posecells, weights=filter.tolist(), axis=2, mode='wrap')
+    
     # Remove any negative values
     self.posecells[self.posecells < 0] = 0
 

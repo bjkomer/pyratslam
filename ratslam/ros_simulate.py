@@ -78,7 +78,7 @@ class RatslamRos():
     pc_max = self.pcn.get_pc_max()
     template_match = self.vts.match( input=im,pc_x=pc_max[0],pc_y=pc_max[1],pc_th=pc_max[2] )
     #TEMP - just inject with this template for now
-    self.pcn.inject( .02, template_match.location() )
+    #self.pcn.inject( .02, template_match.location() )
   
   # This is called whenever new odometry information is received
   def odom_callback( self, data ):
