@@ -26,7 +26,9 @@ class Convolution:
 
     # For special convolutions, if required
     self.fil_1d = fil_1d
+    self.fil_1d_origin = 0
     self.fil_2d = fil_2d
+    self.fil_2d_origin = ( 0, 0 ) # offset of the center of the filter
     
     if im is not None and fil is not None:
       self.set_params( im, fil )
@@ -262,6 +264,27 @@ class Convolution:
           out[ ${offset} + k + ( j + ${offset} ) * ${len_z} + ( i + ${offset} ) * ${len_z} * ${len_y} ] = sum;
         }
         
+        // This does a 2D convolution across a 3D image (each plane is independent)
+        // fil must be 2D and im must be 3D, the filter is offset by the 2D origin value
+        __kernel void conv_xy_origin(__global ${type}* im, __global ${type}* fil, __global ${type}* out,
+                                     __global int origin_x, __global int origin_y )
+        {
+          unsigned int i = get_global_id(0);
+          unsigned int j = get_global_id(1);
+          unsigned int k = get_global_id(2);
+          ${type} sum = 0;
+          
+          for ( unsigned int x = 0; x < ${filsize}; x++ ) {
+            for ( unsigned int y = 0; y < ${filsize}; y++ ) {
+              sum += im[ ( ${offset} + k ) + \
+                         ( origin_y + ${offset} + j + y ${filstart} ) * ${len_z} + \
+                         ( origin_x + ${offset} + i + x ${filstart} ) * ${len_z} * ${len_y} ] * \
+                     fil[ y + x * ${filsize} ];
+            }
+          }
+          out[ ${offset} + k + ( j + ${offset} ) * ${len_z} + ( i + ${offset} ) * ${len_z} * ${len_y} ] = sum;
+        }
+        
         // This does a 1D convolution across a 3D image (each line is independent)
         // fil must be 1D and im must be 3D
         __kernel void conv_z(__global ${type}* im, __global ${type}* fil, __global ${type}* out)
@@ -273,6 +296,26 @@ class Convolution:
           
           for ( unsigned int z = 0; z < ${filsize}; z++ ) {
             sum += im[ ( ${offset} + k + z ${filstart} ) + \
+                       ( ${offset} + j ) * ${len_z} + \
+                       ( ${offset} + i ) * ${len_z} * ${len_y} ] * \
+                   fil[ z ];
+          }
+          
+          out[ ${offset} + k + ( j + ${offset} ) * ${len_z} + ( i + ${offset} ) * ${len_z} * ${len_y} ] = sum;
+        }
+        
+        // This does a 1D convolution across a 3D image (each line is independent)
+        // fil must be 1D and im must be 3D, the filter is offset by the 1D origin value
+        __kernel void conv_z_origin(__global ${type}* im, __global ${type}* fil, __global ${type}* out,
+                                    __global int origin_z )
+        {
+          unsigned int i = get_global_id(0);
+          unsigned int j = get_global_id(1);
+          unsigned int k = get_global_id(2);
+          ${type} sum = 0;
+          
+          for ( unsigned int z = 0; z < ${filsize}; z++ ) {
+            sum += im[ ( origin_z + ${offset} + k + z ${filstart} ) + \
                        ( ${offset} + j ) * ${len_z} + \
                        ( ${offset} + i ) * ${len_z} * ${len_y} ] * \
                    fil[ z ];
@@ -304,12 +347,15 @@ class Convolution:
 
     raise NotImplemented
 
-  def conv_im( self, im, axes=-1 ):
+  def conv_im( self, im, axes=-1, origin=None ):
     """Does the convolution on a new image provided, using the original filter and parameters. 
        If axis parameter is specified (in the form of a list), the convolution will only be lower 
        dimensional and only done along specific axes. This parameter is only read if sep=True"""
 
-    self.replace_image( im )
+    if origin is None:
+      self.replace_image( im )
+    else:
+      self.new_image( im, origin )
     return self.execute( axes )
 
   def execute( self, axes=-1 ):
@@ -463,14 +509,14 @@ class Convolution:
         if self.dim == 1:
           if self.im.shape != self.buf_shape:
             raise TypeError
-          self.im = numpy.empty( self.buf_shape, dtype=self.type)
+          #self.im = numpy.empty( self.buf_shape, dtype=self.type)
           self.im[ self.offset : -self.offset ] = im
           self.im[ : self.offset ] = im[ -2 * self.offset : -self.offset ]
           self.im[ -self.offset : ] = im[ self.offset : 2 * self.offset ]
         elif self.dim == 2:
           if self.im.shape != self.buf_shape:
             raise TypeError
-          self.im = numpy.empty( self.buf_shape, dtype=self.type)
+          #self.im = numpy.empty( self.buf_shape, dtype=self.type)
           self.im[ self.offset : -self.offset, self.offset : - self.offset ] = im
           self.im[ : self.offset, :  ] = self.im[ -2 * self.offset : -self.offset, : ]
           self.im[ -self.offset :, : ] = self.im[ self.offset : 2 * self.offset, : ]
@@ -479,7 +525,7 @@ class Convolution:
         elif self.dim == 3:
           if self.im.shape != self.buf_shape:
             raise TypeError
-          self.im = numpy.empty( self.buf_shape, dtype=self.type)
+          #self.im = numpy.empty( self.buf_shape, dtype=self.type)
           self.im[ self.offset : -self.offset, self.offset : - self.offset, self.offset : - self.offset ] = im
           self.im[ : self.offset, :, :  ] = self.im[ -2 * self.offset : -self.offset, :, : ]
           self.im[ -self.offset :, :, : ] = self.im[ self.offset : 2 * self.offset, :, : ]
@@ -499,6 +545,159 @@ class Convolution:
           str( self.im.dtype) + " and shape " + str( self.im.shape ) + ", while new image is of type " + \
           str( im.dtype ) + " and shape " + str( im.shape ) + ". To change shape/type, use new_image()" 
   
-  def new_image( self, im ):
-    """Replaces the currently loaded image with a new one, and updates the buffers and opencl program accordingly"""
-    raise NotImplemented
+  def new_image( self, im, radius=None ):
+    """Replaces the currently loaded image with a new one, and updates the buffers and opencl program accordingly
+       If radius is specified, sets up the buffers to handle origin offsets equal to the radius"""
+    if radius is None:
+      raise NotImplemented
+    elif len( origin ) == 1: # 1D origin, for conv_z_origin
+      raise NotImplemented
+    elif len( origin ) == 2: # 2D origin, for conv_xy_origin
+      # Do the wrapping
+      if self.larger_buffer:
+        if self.dim == 1:
+          raise NotImplemented
+        elif self.dim == 2:
+          raise NotImplemented
+        elif self.dim == 3:
+          self.fil_2d_origin = origin
+          if self.max_2d_buffer: # If the image remains a constant size based on maximum allowed origin
+            raise NotImplemented
+          else:
+            # If origin is specified, the shape of the buffer will change to a form similar to this diagram:
+            # (Not to scale, 'im' will likely be the largest portion by far)
+            #
+            #<-----buf_2d_shape[0]----->
+            #____________________________
+            #| ________________________  |       | self.offset
+            #| |                       | |   |
+            #| |                       | |   | offset_y
+            #| |      ___________      | |   |
+            #| |     |           |     | |       |
+            #| |     |           |     | |       |
+            #| |     |    im     |     | |       |  im_shape[1]
+            #| |     |           |     | |       |
+            #| |     |           |     | |       |
+            #| |     |___________|     | |       |
+            #| |                       | |   |
+            #| |                       | |   | offset_y
+            #| |_______________________| |   |
+            #|___________________________|       | self.offset
+            #
+            #<>                        <>
+            #self.offset       sefl.offset
+            #
+            #  <---->             <---->
+            # offset_x           offset_x
+            #
+            #        <----------->
+            #         im_shape[0]
+            offset_x = abs( self.fil_2d_origin[0] )
+            offset_y = abs( self.fil_2d_origin[1] )
+            offset_xt = offset_x + self.offset
+            offset_yt = offset_y + self.offset
+            self.buf_2d_shape = ( self.im_shape[0] + 2 * radius ), 
+                                  self.im_shape[1] + 2 * radius ), 
+                                  self.im_shape[2] + 2 * self.offset ) # The z axis does not need to be larger
+            self.im_2d = numpy.empty( self.buf_2d_shape, dtype=self.type)
+
+            self.im_2d[ radius : -radius , 
+                        radius : -radius, 
+                        self.offset : -self.offset ] = im
+            
+            self.im_2d[ : self.offset + offset_x, :, :  ] = \
+                self.im_2d[ -2 * self.offset - offset_x: -self.offset, :, : ]
+
+            self.im_2d[ -self.offset :, :, : ] = \
+                self.im_2d[ self.offset + offset_x : 2 * self.offset + offset_x, :, : ]
+
+            self.im_2d[ :, : self.offset + offset_y, :  ] = \
+                self.im_2d[ :, -2 * self.offset - offset_y : -self.offset, : ]
+
+            self.im_2d[ :, -self.offset :, : ] = \
+                self.im_2d[ :, self.offset + offset_y : 2 * self.offset + offset_y, : ]
+
+            self.im_2d[ :, :, : self.offset  ] = self.im_2d[ :, :, -2 * self.offset : -self.offset ]
+            self.im_2d[ :, :, -self.offset : ] = self.im_2d[ :, :, self.offset : 2 * self.offset ]
+
+
+            """ TODO: remove this if no longer needed
+            # If origin is specified, the shape of the buffer will change to a form similar to this diagram:
+            # depending on the signs of the origin, the image will be located in a different corner.
+            # The case below is for when the x and y of the origin are positive
+            #
+            #<--buf_2d_shape[0]--->
+            #______________________
+            #| __________________  |
+            #| |                 | |
+            #| |                 | |
+            #| |                 | |
+            #| |      ___________| |
+            #| |     |           | |
+            #| |     |           | |
+            #| |     |    im     | |
+            #| |     |           | |
+            #| |     |           | |
+            #| |_____|___________| |
+            #|_____________________|
+            #
+            #<>
+            #self.offset
+            #
+            #  <---->
+            #  offset_x
+            #
+            #        <----------->
+            #         im_shape[0]
+            offset_x = abs( self.fil_2d_origin[0] )
+            offset_y = abs( self.fil_2d_origin[1] )
+            self.buf_2d_shape = ( self.im_shape[0] + 2 * self.offset + offset_x ), 
+                                  self.im_shape[1] + 2 * self.offset + offset_y ), 
+                                  self.im_shape[2] + 2 * self.offset ) # The z axis does not need to be larger
+            self.im_2d = numpy.empty( self.buf_2d_shape, dtype=self.type)
+            self.textconf['len_y'] = self.buf_shape[1]
+            self.textconf['len_z'] = self.buf_shape[2]
+            if self.fil_2d_origin[0] > 0:
+              if self.fil_2d_origin[1] > 0:
+                self.im_2d[ self.offset + offset_x : -self.offset, 
+                            self.offset + offset_y : -self.offset, 
+                            self.offset : -self.offset ] = im
+
+                self.im_2d[ : self.offset + offset_x, :, :  ] = \
+                    self.im_2d[ -2 * self.offset - offset_x: -self.offset, :, : ]
+
+                self.im_2d[ -self.offset :, :, : ] = \
+                    self.im_2d[ self.offset + offset_x : 2 * self.offset + offset_x, :, : ]
+
+                self.im_2d[ :, : self.offset + offset_y, :  ] = \
+                    self.im_2d[ :, -2 * self.offset - offset_y : -self.offset, : ]
+
+                self.im_2d[ :, -self.offset :, : ] = \
+                    self.im_2d[ :, self.offset + offset_y : 2 * self.offset + offset_y, : ]
+
+                self.im_2d[ :, :, : self.offset  ] = self.im_2d[ :, :, -2 * self.offset : -self.offset ]
+                self.im_2d[ :, :, -self.offset : ] = self.im_2d[ :, :, self.offset : 2 * self.offset ]
+              else:
+                self.im_2d[ self.offset + offset_x : -self.offset, 
+                            self.offset : -self.offset - offset_y, 
+                            self.offset : -self.offset ] = im
+
+                self.im_2d[ : self.offset + offset_x, :, :  ] = \
+                    self.im_2d[ -2 * self.offset - offset_x: -self.offset, :, : ]
+
+                self.im_2d[ -self.offset :, :, : ] = \
+                    self.im_2d[ self.offset + offset_x : 2 * self.offset + offset_x, :, : ]
+
+                #self.im_2d[ :, : self.offset + offset_y, :  ] = \
+                #    self.im_2d[ :, -2 * self.offset - offset_y : -self.offset, : ]
+
+                #self.im_2d[ :, -self.offset :, : ] = \
+                #    self.im_2d[ :, self.offset + offset_y : 2 * self.offset + offset_y, : ]
+
+                #self.im_2d[ :, :, : self.offset  ] = self.im_2d[ :, :, -2 * self.offset : -self.offset ]
+                #self.im_2d[ :, :, -self.offset : ] = self.im_2d[ :, :, self.offset : 2 * self.offset ]
+            else:
+              if self.fil_2d_origin[1] > 0:
+              else:
+              """
+      

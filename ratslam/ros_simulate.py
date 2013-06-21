@@ -21,12 +21,15 @@ from collections import deque
 
 import cProfile
 
-POSE_SIZE = ( 50, 50, 30 )
-#POSE_SIZE = ( 50, 50, 50 ) # FIXME: temp change to make it symmetric
-#POSE_SIZE = ( 5, 5, 5 ) # FIXME: temp change to make it symmetric
-IM_SIZE = ( 256, 256 ) #( 512, 512 )
-X_RANGE = ( 64, 192 ) #( 128, 384 )
-Y_RANGE = ( 64, 192 ) #( 128, 384 )
+# TEMP: testing with smaller things to make it run faster
+#POSE_SIZE = ( 50, 50, 30 )
+POSE_SIZE = ( 25, 25, 75 )
+#IM_SIZE = ( 256, 256 ) #( 512, 512 )
+IM_SIZE = ( 128, 128 ) #( 512, 512 )
+#X_RANGE = ( 64, 192 ) #( 128, 384 )
+#Y_RANGE = ( 64, 192 ) #( 128, 384 )
+X_RANGE = ( 32, 96 )
+Y_RANGE = ( 32, 96 )
 X_STEP = 2
 Y_STEP = 2
 MATCH_THRESHOLD = 10 # the smaller the value, the easier it is to make a match
@@ -91,12 +94,15 @@ class RatslamRos():
 
     rospy.init_node( 'posecells', anonymous=True )
     sub_odom = rospy.Subscriber( 'navbot/odom',Odometry,self.odom_callback )
-    sub_vis = rospy.Subscriber( 'navbot/camera/image',Image,self.vis_callback )
+    #sub_vis = rospy.Subscriber( 'navbot/camera/image',Image,self.vis_callback ) #TODO: put this back when done testing
     pub_pc = rospy.Publisher( 'navbot/posecells', numpy_msg(Float64MultiArray) )
     pub_em = rospy.Publisher( 'navbot/experiencemap', Pose2D )
 
+    count = 0
+    #while True:
     while not rospy.is_shutdown():
-      if len(self.twist_data) > 0:
+      #if len(self.twist_data) > 0:
+      if self.twist_data:
         twist = self.twist_data.popleft()
         vtrans = twist.linear.x / self.odom_freq
         vrot = twist.angular.z / self.odom_freq
@@ -112,6 +118,9 @@ class RatslamRos():
         
         pub_pc.publish( self.pc_layout, pc.ravel() )
         pub_em.publish( em_msg )
+        count += 1
+      #elif count > 500: #FIXME: temporary break for speed testing
+      #  break
 
 def main():
   ratslam = RatslamRos()

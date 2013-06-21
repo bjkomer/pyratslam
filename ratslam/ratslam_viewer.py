@@ -11,12 +11,15 @@ from std_msgs.msg import Float64MultiArray, MultiArrayLayout, MultiArrayDimensio
 from rospy.numpy_msg import numpy_msg
 from numpy import *
 
+import cProfile
+
 # NOTE: using matplotlib for now, try will glumpy later, to see if queues can be removed
 
-POSE_SIZE = ( 50, 50, 30 )
+#POSE_SIZE = ( 50, 50, 30 )
+POSE_SIZE = ( 25, 25, 75 )
 # Booleans for whether or not certain displays will be shown
 EM_ENABLED = True
-IM_ENABLED = True
+IM_ENABLED = False #True
 PC_ENABLED = True
 VT_ENABLED = False
 
@@ -100,17 +103,17 @@ class RatslamViewer( ):
 
     pc_scatter = None
     while not rospy.is_shutdown():
-      if len(self.em_data) > 0:
+      if self.em_data:
         em = self.em_data.popleft()
         # TODO: Incorporate direction being faced into the display
         self.em_ax.plot( [ em_prev_xy[0], em[0] ], [ em_prev_xy[1], em[1] ],'b')
         em_prev_xy = em
         self.em_fig.canvas.draw()
-      if len( self.im_data ) > 0:
+      if self.im_data:
         im = self.im_data.popleft()
         self.im_im.set_data( im )
         self.im_im.axes.figure.canvas.draw()
-      if len( self.pc_data ) > 0:
+      if self.pc_data:
         pc = self.pc_data.popleft()
         # TODO: do conversion from sparse matrix here
         #pc = pc_sparse
@@ -121,7 +124,7 @@ class RatslamViewer( ):
         pc_scatter = self.pc_ax.scatter(pc_index[0],pc_index[1],pc_index[2],s=pc_value)
         
         self.pc_fig.canvas.draw()
-      if len( self.vt_data ) > 0:
+      if self.vt_data:
         vt = self.vt_data.popleft()
         self.vt_im.set_data( vt )
         self.vt_im.axes.figure.canvas.draw()
@@ -131,4 +134,5 @@ def main():
   viewer.run()
 
 if __name__ == "__main__":
-  main()
+  cProfile.run('main()','pstats_viewer.out') # TEMP: write out profiling stats
+  #main()

@@ -196,6 +196,7 @@ class PoseCellNetwork:
         exp( (-( x - center[0])**2 - (y - center[1])**2 ) / (2*sigma_i**2))
     f /= abs(sum(f.ravel())) # normalize
     #f = square( cbrt( f ) ) # The result of this filter and a 1D filter should be normalized
+    f = cbrt( f ) # TEMP
     return f
 
   def diff_gaussian_offset_1d( self, sigma_e, sigma_i, size=7, origin=0 ):
@@ -220,10 +221,12 @@ class PoseCellNetwork:
     mid = math.floor( self.shape[2] / 2 )
     for dir_pc in xrange( self.shape[2] ):
       # use a 2D gaussian filter across every theta (direction) layer, with the origin offset based on vtrans and vrot
-      origin = ( vtrans*cos( (dir_pc - mid)*self.pc_vrot_scale ), vtrans*sin( (dir_pc - mid)*self.pc_vrot_scale ) )
+      #origin = ( vtrans*cos( (dir_pc - mid)*self.pc_vrot_scale ), vtrans*sin( (dir_pc - mid)*self.pc_vrot_scale ) )
+      origin = ( vtrans*cos( (dir_pc)*self.pc_vrot_scale ), vtrans*sin( (dir_pc)*self.pc_vrot_scale ) )
+      #origin = (4,4)
       ####print origin
-      filter = self.diff_gaussian_offset_2d( PC_E_SIGMA, PC_I_SIGMA, size=(7,7), origin=origin )
-      #filter = self.diff_gaussian_offset_2d( PC_E_SIGMA, PC_I_SIGMA, size=(15,15), origin=origin )
+      #filter = self.diff_gaussian_offset_2d( PC_E_SIGMA, PC_I_SIGMA, size=(7,7), origin=origin )
+      filter = self.diff_gaussian_offset_2d( PC_E_SIGMA, PC_I_SIGMA, size=(15,15), origin=origin )
       #filter = self.diff_gaussian_offset_2d( PC_E_SIGMA, PC_I_SIGMA, size=(7,7), origin=(0,0) )
       #self.conv.new_filter( filter, dim=2 )
       #self.posecells = self.conv.conv_im( self.posecells, axes=[0,1] )
@@ -231,6 +234,9 @@ class PoseCellNetwork:
       # Using origin shifted filter
       self.posecells[:,:,dir_pc] = \
           ndimage.correlate( self.posecells[:,:,dir_pc], filter, mode='wrap' )
+      
+      #self.posecells[:,:,dir_pc] = \
+      #    ndimage.correlate( self.posecells[:,:,dir_pc], filter, mode='wrap', origin=origin )
       
       #self.posecells[:,:,dir_pc] = \
       #    ndimage.correlate( self.posecells[:,:,dir_pc], self.kernel_2d, mode='wrap', origin=origin )
