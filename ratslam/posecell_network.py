@@ -35,6 +35,7 @@ class PoseCellNetwork:
     #self.conv = Convolution( im=self.posecells, fil=self.kernel_1d, sep=True, type=float64 )
     #self.conv = Convolution( im=self.posecells, fil=self.kernel_1d_sep, sep=True, type=float64 )
     self.conv = Convolution( im=self.posecells, fil=self.kernel_3d, sep=False, type=float64 )
+    self.conv.new_filter( self.kernel_2d, dim=2 )
 
   # builds a 3D gaussian filter kernel with lengths of 'dim'
   def build_kernel( self, dim, sigma, order=3 ):
@@ -219,10 +220,19 @@ class PoseCellNetwork:
 
     #TODO - this can be optimized better in the future
     mid = math.floor( self.shape[2] / 2 )
+    dir_pc = arange( self.shape[2] )
+    origins = ( ceil( vtrans*cos( (dir_pc - mid)*self.pc_vrot_scale ) ), 
+                ceil( vtrans*sin( (dir_pc - mid)*self.pc_vrot_scale ) ) )
+    print "about to conv in xy" #FIXME: crashes after this line, on second time through, first is fine
+    # PROBABLY DUE TO CEIL FUNCTION NOT WORKING CORRECTLY FOR NEGATIVES, FIX THIS!!!!!
+    self.posecells = self.conv.conv_im( self.posecells, axes=[0,1], radius=ceil( vtrans ), origins=origins )
+    print self.posecells
+    print self.posecells.shape
+    """
     for dir_pc in xrange( self.shape[2] ):
       # use a 2D gaussian filter across every theta (direction) layer, with the origin offset based on vtrans and vrot
-      #origin = ( vtrans*cos( (dir_pc - mid)*self.pc_vrot_scale ), vtrans*sin( (dir_pc - mid)*self.pc_vrot_scale ) )
-      origin = ( vtrans*cos( (dir_pc)*self.pc_vrot_scale ), vtrans*sin( (dir_pc)*self.pc_vrot_scale ) )
+      origin = ( vtrans*cos( (dir_pc - mid)*self.pc_vrot_scale ), vtrans*sin( (dir_pc - mid)*self.pc_vrot_scale ) )
+      #origin = ( vtrans*cos( (dir_pc)*self.pc_vrot_scale ), vtrans*sin( (dir_pc)*self.pc_vrot_scale ) )
       #origin = (4,4)
       ####print origin
       #filter = self.diff_gaussian_offset_2d( PC_E_SIGMA, PC_I_SIGMA, size=(7,7), origin=origin )
@@ -240,7 +250,7 @@ class PoseCellNetwork:
       
       #self.posecells[:,:,dir_pc] = \
       #    ndimage.correlate( self.posecells[:,:,dir_pc], self.kernel_2d, mode='wrap', origin=origin )
-    
+    """
     # Remove any negative values
     self.posecells[self.posecells < 0] = 0
     
@@ -257,7 +267,7 @@ class PoseCellNetwork:
     
     # Remove any negative values
     self.posecells[self.posecells < 0] = 0
-
+    
   # Not entirely sure what this should do yet ##???????????????????
   def get_pc_max( self ):
     (x,y,th) = unravel_index(self.posecells.argmax(), self.posecells.shape)
@@ -279,7 +289,7 @@ class PoseCellNetwork:
     #input and output the same might not work
     #self.posecells = ndimage.correlate(self.posecells, self.kernel_3d, mode='wrap')
     self.posecells = self.conv.conv_im( self.posecells )
-
+    
     # 3. Global Inhibition
     self.posecells[self.posecells < self.global_inhibition] = 0
     self.posecells[self.posecells >= self.global_inhibition] -= self.global_inhibition
@@ -288,10 +298,10 @@ class PoseCellNetwork:
     total = sum(self.posecells.ravel())
     if total != 0:
       self.posecells /= total
-
+    
     # Path Integration
     self.path_integration( vtrans, vrot )
-
+    
     # get the maximum pose cell
     self.max_pc = self.get_pc_max()
 
