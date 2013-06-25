@@ -312,6 +312,33 @@ class Convolution:
               ( i + ${offset} ) * len_z * ( len_y - 2 * radius ) ] = sum;
         }
         
+        // This does a 2D convolution across a 3D image (each plane is independent)
+        // fil must be 2D and im must be 3D, the filter is offset by the 2D origin value
+        // This function requires len_z and len_y as inputs rather than hardcoded, so it does not need to be
+        // recompiled if they are changed
+        // This function requires an array of filters centered at each origin as input
+        __kernel void conv_xy_origin_filters( __global ${type}* im, __global ${type}* fil, __global ${type}* out,
+                                              __global int* origin_x, __global int* origin_y, 
+                                              int radius, int len_y, int len_z )
+        {
+          unsigned int i = get_global_id(0);
+          unsigned int j = get_global_id(1);
+          unsigned int k = get_global_id(2);
+          ${type} sum = 0;
+          
+          for ( unsigned int x = 0; x < ${filsize}; x++ ) {
+            for ( unsigned int y = 0; y < ${filsize}; y++ ) {
+              sum += im[ ( ${offset} + k ) + \
+                         ( ${offset} + origin_y[k] + radius + j + y ${filstart} ) * len_z + \
+                         ( ${offset} + origin_x[k] + radius + i + x ${filstart} ) * len_z * len_y ] * \
+                     fil[ k + y * ( len_z - 2 * ${offset} ) + x * ( len_z - 2 * ${offset} ) * ${filsize} ];
+            }
+          }
+          out[ ${offset} + k + \
+              ( j + ${offset} ) * len_z + \
+              ( i + ${offset} ) * len_z * ( len_y - 2 * radius ) ] = sum;
+        }
+
         // This does a 1D convolution across a 3D image (each line is independent)
         // fil must be 1D and im must be 3D
         __kernel void conv_z(__global ${type}* im, __global ${type}* fil, __global ${type}* out)
@@ -374,7 +401,7 @@ class Convolution:
 
     raise NotImplemented
 
-  def conv_im( self, im, axes=-1, radius=None, origins=None ):
+  def conv_im( self, im, axes=-1, radius=None, origins=None, filters=None ):
     """Does the convolution on a new image provided, using the original filter and parameters. 
        If axis parameter is specified (in the form of a list), the convolution will only be lower 
        dimensional and only done along specific axes. This parameter is only read if sep=True"""
@@ -382,10 +409,10 @@ class Convolution:
     if origins is None:
       self.replace_image( im )
     else:
-      self.new_image( im, radius, origins )
-    return self.execute( axes, origins is not None )
+      self.new_image( im, radius, origins, filters )
+    return self.execute( axes, origins is not None, filters is not None )
 
-  def execute( self, axes=-1, origins=None ):
+  def execute( self, axes=-1, origins=None, filters=None ):
     
     if self.sep:
       if self.dim == 1:
@@ -454,13 +481,16 @@ class Convolution:
       elif self.dim == 3:
         if 0 in axes and 1 in axes: # 2D convolution on each xy plane
           if origins: # List of origins for each plane is provided
-            #self.program.conv_xy_origin( self.queue, self.im_shape, None, 
-            #    self.im_2d_offset_buf, self.fil_2d_buf, self.dest_buf,
-            #    self.origins_x_buf, self.origins_y_buf )
-            self.program.conv_xy_origin_variable( self.queue, self.im_shape, None, 
-                self.im_2d_offset_buf, self.fil_2d_buf, self.dest_buf,
-                self.origins_x_buf, self.origins_y_buf, numpy.int32( self.radius ),
-                numpy.int32(self.buf_2d_shape[1]), numpy.int32(self.buf_2d_shape[2]) )
+            if filters: # List of filters for each plane, for higher accuracy
+              self.program.conv_xy_origin_filters( self.queue, self.im_shape, None, 
+                  self.im_2d_offset_buf, self.fil_2d_array_buf, self.dest_buf,
+                  self.origins_x_buf, self.origins_y_buf, numpy.int32( self.radius ),
+                  numpy.int32(self.buf_2d_shape[1]), numpy.int32(self.buf_2d_shape[2]) )
+            else:
+              self.program.conv_xy_origin_variable( self.queue, self.im_shape, None, 
+                  self.im_2d_offset_buf, self.fil_2d_buf, self.dest_buf,
+                  self.origins_x_buf, self.origins_y_buf, numpy.int32( self.radius ),
+                  numpy.int32(self.buf_2d_shape[1]), numpy.int32(self.buf_2d_shape[2]) )
           else:
             self.program.conv_xy( self.queue, self.im_shape, None, self.im_buf, self.fil_2d_buf, self.dest_buf )
           out = numpy.empty_like( self.im )
@@ -582,7 +612,7 @@ class Convolution:
           str( self.im.dtype) + " and shape " + str( self.im.shape ) + ", while new image is of type " + \
           str( im.dtype ) + " and shape " + str( im.shape ) + ". To change shape/type, use new_image()" 
   
-  def new_image( self, im, radius=None, origins=None ):
+  def new_image( self, im, radius=None, origins=None, filters=None ):
     """Replaces the currently loaded image with a new one, and updates the buffers and opencl program accordingly
        If radius is specified then the buffers will be set to handle any origin offset of that radius"""
     if radius is None:
@@ -649,9 +679,19 @@ class Convolution:
           
           mf = cl.mem_flags
           self.im_2d_offset_buf = cl.Buffer(self.ctx, mf.READ_ONLY | mf.COPY_HOST_PTR, hostbuf=self.im_2d)
-          
-          self.origins_x_buf = cl.Buffer( self.ctx, mf.READ_ONLY | mf.COPY_HOST_PTR, hostbuf=origins[0].astype(int) )
-          self.origins_y_buf = cl.Buffer( self.ctx, mf.READ_ONLY | mf.COPY_HOST_PTR, hostbuf=origins[1].astype(int) )
+
+          #origins_x = origins[0,:].astype(numpy.int32).copy()
+          #origins_y = origins[1,:].astype(numpy.int32).copy()
+
+          self.origins_x_buf = cl.Buffer( self.ctx, mf.READ_ONLY | mf.COPY_HOST_PTR, 
+                                          hostbuf=origins[0,:].astype( numpy.int32 ) )
+          self.origins_y_buf = cl.Buffer( self.ctx, mf.READ_ONLY | mf.COPY_HOST_PTR,
+                                          hostbuf=origins[1,:].astype( numpy.int32 ) )
+          #self.origins_x_buf = cl.Buffer(self.ctx, mf.READ_ONLY | mf.COPY_HOST_PTR, hostbuf=origins_x)
+          #self.origins_y_buf = cl.Buffer(self.ctx, mf.READ_ONLY | mf.COPY_HOST_PTR, hostbuf=origins_y)
+
+          if filters is not None:
+            self.fil_2d_array_buf = cl.Buffer( self.ctx, mf.READ_ONLY | mf.COPY_HOST_PTR, hostbuf=filters )
 
 
 

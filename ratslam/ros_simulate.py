@@ -23,7 +23,8 @@ import cProfile
 
 # TEMP: testing with smaller things to make it run faster
 #POSE_SIZE = ( 50, 50, 30 )
-POSE_SIZE = ( 25, 25, 75 )
+#POSE_SIZE = ( 25, 25, 75 )
+POSE_SIZE = ( 21, 21, 36 )
 #IM_SIZE = ( 256, 256 ) #( 512, 512 )
 IM_SIZE = ( 128, 128 ) #( 512, 512 )
 #X_RANGE = ( 64, 192 ) #( 128, 384 )
@@ -81,7 +82,7 @@ class RatslamRos():
     pc_max = self.pcn.get_pc_max()
     template_match = self.vts.match( input=im,pc_x=pc_max[0],pc_y=pc_max[1],pc_th=pc_max[2] )
     #TEMP - just inject with this template for now
-    #self.pcn.inject( .02, template_match.location() )
+    self.pcn.inject( .02, template_match.location() )
   
   # This is called whenever new odometry information is received
   def odom_callback( self, data ):
@@ -94,7 +95,7 @@ class RatslamRos():
 
     rospy.init_node( 'posecells', anonymous=True )
     sub_odom = rospy.Subscriber( 'navbot/odom',Odometry,self.odom_callback )
-    #sub_vis = rospy.Subscriber( 'navbot/camera/image',Image,self.vis_callback ) #TODO: put this back when done testing
+    sub_vis = rospy.Subscriber( 'navbot/camera/image',Image,self.vis_callback )
     pub_pc = rospy.Publisher( 'navbot/posecells', numpy_msg(Float64MultiArray) )
     pub_em = rospy.Publisher( 'navbot/experiencemap', Pose2D )
 

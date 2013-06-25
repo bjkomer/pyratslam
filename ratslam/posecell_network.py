@@ -11,7 +11,8 @@ PC_E_SIGMA = 1 # sigma for the excitatory gaussian kernel
 PC_I_SIGMA = 2 # sigma for the inhibitory gaussian kernel
 PC_E_DIM   = 7 #+2# the size of the excitatory kernel
 PC_I_DIM   = 5 #+2# the size of the inhibitory kernel
-PC_GLOBAL_INHIB = 0.00002 # value of global inhibition
+#PC_GLOBAL_INHIB = 0.00002 # value of global inhibition
+PC_GLOBAL_INHIB = 0.2 # value of global inhibition
 PC_CELL_X_SIZE = .2#1
 PC_C_SIZE_TH = 2.0 *pi / PC_DIM_TH
 
@@ -39,7 +40,7 @@ class PoseCellNetwork:
     #self.conv = Convolution( im=self.posecells, fil=self.kernel_1d_sep, sep=True, type=float64 )
     self.conv = Convolution( im=self.posecells, fil=self.kernel_3d, sep=False, type=float64 )
     
-    filter = self.diff_gaussian_offset_2d( PC_E_SIGMA, PC_I_SIGMA, size=(7,7), origin=(0,0) )
+    filter = self.diff_gaussian_offset_2d( PC_E_SIGMA, PC_I_SIGMA, shape=(7,7), origin=(0,0) )
     #self.conv.new_filter( self.kernel_2d, dim=2 )
     self.conv.new_filter( filter, dim=2 )
 
@@ -192,11 +193,11 @@ class PoseCellNetwork:
     f = cbrt( f ) # Take the cubed root, so the filter applied 3 times will be normalized
     return f
 
-  def diff_gaussian_offset_2d( self, sigma_e, sigma_i, size=( 7, 7 ), origin=( 0, 0 ) ):
+  def diff_gaussian_offset_2d( self, sigma_e, sigma_i, shape=( 7, 7 ), origin=( 0, 0 ) ):
     """Builds a 2D difference of gaussian kernel centered at the origin given"""
-    f = empty( size )
-    x, y = meshgrid( arange( size[0] ) - origin[0], arange( size[1] ) - origin[1] )
-    center = ( math.floor( size[0] / 2 ), math.floor( size[1] / 2 ) )
+    f = empty( shape )
+    x, y = meshgrid( arange( shape[0] ) - origin[0], arange( shape[1] ) - origin[1] )
+    center = ( math.floor( shape[0] / 2 ), math.floor( shape[1] / 2 ) )
     f = 1.0 / ( 2* sigma_e**2 * pi ) * \
         exp( (-( x - center[0])**2 - (y - center[1])**2 ) / (2*sigma_e**2)) - \
         1.0 / ( 2 * sigma_i**2 * pi ) * \
@@ -219,6 +220,12 @@ class PoseCellNetwork:
     f = cbrt( f ) # The result of this filter and a 2D filter should be normalized
     return f
 
+  def filters_from_origins( self, origins, shape=( 7, 7 ) ):
+    num = origins.shape[1]
+    filters = empty( ( shape[0], shape[1], num ) )
+    for z in xrange(num):
+      filters[:,:,z] = self.diff_gaussian_offset_2d( PC_E_SIGMA, PC_I_SIGMA, shape=shape, origin=origins[:,z] )
+    return filters
 
   def path_integration( self, vtrans, vrot ):
     vtrans /= self.pc_vtrans_scale
@@ -226,14 +233,26 @@ class PoseCellNetwork:
 
     #TODO - this can be optimized better in the future
     mid = math.floor( self.shape[2] / 2 )
-    dir_pc = arange( self.shape[2] )
-    origins = ( ceil( vtrans*cos( (dir_pc - mid)*self.pc_vrot_scale ) ), 
-                ceil( vtrans*sin( (dir_pc - mid)*self.pc_vrot_scale ) ) )
-    #origins = ( 0*ceil( vtrans*cos( (dir_pc - mid)*self.pc_vrot_scale ) ), 
-    #            0*ceil( vtrans*sin( (dir_pc - mid)*self.pc_vrot_scale ) ) )
-    # PROBABLY DUE TO CEIL FUNCTION NOT WORKING CORRECTLY FOR NEGATIVES, FIX THIS!!!!!
-    self.posecells = self.conv.conv_im( self.posecells, axes=[0,1], radius=ceil( abs( vtrans ) ), origins=origins )
-    #self.posecells = self.conv.conv_im( self.posecells, axes=[0,1], radius=3, origins=origins )
+    
+    #"""
+    dir_pc = arange( self.shape[2] ).reshape( (1, self.shape[2] ) )
+
+    origins_exact = concatenate( ( vtrans*cos( (dir_pc - mid)*self.pc_vrot_scale ), 
+                                   vtrans*sin( (dir_pc - mid)*self.pc_vrot_scale ) ), axis=0 )
+    origins = concatenate( ( around( vtrans*cos( (dir_pc - mid)*self.pc_vrot_scale ) ), 
+                             around( vtrans*sin( (dir_pc - mid)*self.pc_vrot_scale ) ) ), axis=0 )
+    
+    #origins_exact = ( vtrans*cos( (dir_pc - mid)*self.pc_vrot_scale ), 
+    #                  vtrans*sin( (dir_pc - mid)*self.pc_vrot_scale ) )
+    #origins = ( around( vtrans*cos( (dir_pc - mid)*self.pc_vrot_scale ) ), 
+    #            around( vtrans*sin( (dir_pc - mid)*self.pc_vrot_scale ) ) )
+    origins_diff = origins_exact - origins
+    #print origins_diff
+    filters = self.filters_from_origins( origins_diff )
+    
+    self.posecells = self.conv.conv_im( self.posecells, axes=[0,1], radius=ceil( abs( vtrans ) ), 
+                                        origins=origins, filters=filters )
+    #"""
     """
     for dir_pc in xrange( self.shape[2] ):
       # use a 2D gaussian filter across every theta (direction) layer, with the origin offset based on vtrans and vrot
@@ -241,9 +260,9 @@ class PoseCellNetwork:
       #origin = ( vtrans*cos( (dir_pc)*self.pc_vrot_scale ), vtrans*sin( (dir_pc)*self.pc_vrot_scale ) )
       #origin = (4,4)
       ####print origin
-      #filter = self.diff_gaussian_offset_2d( PC_E_SIGMA, PC_I_SIGMA, size=(7,7), origin=origin )
-      filter = self.diff_gaussian_offset_2d( PC_E_SIGMA, PC_I_SIGMA, size=(15,15), origin=origin )
-      #filter = self.diff_gaussian_offset_2d( PC_E_SIGMA, PC_I_SIGMA, size=(7,7), origin=(0,0) )
+      #filter = self.diff_gaussian_offset_2d( PC_E_SIGMA, PC_I_SIGMA, shape=(7,7), origin=origin )
+      filter = self.diff_gaussian_offset_2d( PC_E_SIGMA, PC_I_SIGMA, shape=(12,12), origin=origin )
+      #filter = self.diff_gaussian_offset_2d( PC_E_SIGMA, PC_I_SIGMA, shape=(7,7), origin=(0,0) )
       #self.conv.new_filter( filter, dim=2 )
       #self.posecells = self.conv.conv_im( self.posecells, axes=[0,1] )
       
@@ -308,17 +327,8 @@ class PoseCellNetwork:
     # Path Integration
     self.path_integration( vtrans, vrot )
     
-    #TEMP TODO REMOVE # 4. Normalization
-    #total = sum(self.posecells.ravel())
-    #if total != 0:
-    #  self.posecells /= total
-    
     # get the maximum pose cell
     self.max_pc = self.get_pc_max()
-    #print self.max_pc
-    #print self.posecells[self.max_pc]
- 
-    #print( self.posecells ) #TODO: remove this
 
     return self.max_pc
 

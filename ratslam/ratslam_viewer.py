@@ -16,7 +16,8 @@ import cProfile
 # NOTE: using matplotlib for now, try will glumpy later, to see if queues can be removed
 
 #POSE_SIZE = ( 50, 50, 30 )
-POSE_SIZE = ( 25, 25, 75 )
+#POSE_SIZE = ( 25, 25, 75 )
+POSE_SIZE = ( 21, 21, 36 )
 # Booleans for whether or not certain displays will be shown
 EM_ENABLED = True
 IM_ENABLED = False #True
