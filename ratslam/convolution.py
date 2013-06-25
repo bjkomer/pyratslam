@@ -301,49 +301,15 @@ class Convolution:
           
           for ( unsigned int x = 0; x < ${filsize}; x++ ) {
             for ( unsigned int y = 0; y < ${filsize}; y++ ) {
-              //sum += im[ ( ${offset} + k ) + \
-              //           ( ${offset} + origin_y[k] + radius + j + y ${filstart} ) * len_z + \
-              //           ( ${offset} + origin_x[k] + radius + i + x ${filstart} ) * len_z * len_y ] * \
-              //       fil[ y + x * ${filsize} ];
-              int index = ( ${offset} + k ) + \
-                          ( ${offset} + origin_y[k] + radius + j + y ${filstart} ) * len_z + \
-                          ( ${offset} + origin_x[k] + radius + i + x ${filstart} ) * len_z * len_y;
-              int limit = (25 + 2* (radius + ${offset}))*(25 + 2* (radius + ${offset}))*(75 * 2 * ${offset});
-              if ( index >= limit ) {
-                printf("index: %d\\n",index);
-              }
-              sum += im[ index ] * \
+              sum += im[ ( ${offset} + k ) + \
+                         ( ${offset} + origin_y[k] + radius + j + y ${filstart} ) * len_z + \
+                         ( ${offset} + origin_x[k] + radius + i + x ${filstart} ) * len_z * len_y ] * \
                      fil[ y + x * ${filsize} ];
             }
           }
-          //if ( sum > 0 ) {
-          //  printf("the sum is %f\\n",sum);
-          //  printf("index: %d\\n",${offset} + k +( j + ${offset} ) * len_z +( i + ${offset} ) * len_z * len_y);
-          //}
-          //out[ ${offset} + k + \
-          //    ( j + ${offset} ) * ( len_z - 2 * (radius - ${offset}) ) + \
-          //    ( i + ${offset} ) * ( len_z - 2 * (radius - ${offset}) ) * ( len_y - 2 * (radius - ${offset})) ] = sum;
-          //int index = ${offset} + k + \
-          //        ( j + ${offset} ) * ( len_z - 2 * (radius - ${offset}) ) + \
-          //        ( i + ${offset} ) * ( len_z - 2 * (radius - ${offset}) ) * ( len_y - 2 * (radius - ${offset}));
-          //int index = ${offset} + k + \
-          //        ( j + ${offset} ) * ( len_z - 2 * (radius) ) + \
-          //        ( i + ${offset} ) * ( len_z - 2 * (radius) ) * ( len_y - 2 * (radius));
-          //int index = ${offset} + k + \
-          //        ( j + ${offset} ) * ( len_z ) + \
-          //        ( i + ${offset} ) * ( len_z ) * ( len_y );
-          int index =  ${offset} + k + \
-                  ( ${offset} + j ) * ( len_z ) + \
-                  ( ${offset} + i ) * ( len_z ) * ( len_y - 2 * radius);
-          int limit = (25+3)*(25+3)*(75+3);
-          if ( index >= limit ) {
-            printf("out out of limit: %d\\n",index);
-          }
-          //out[ ${offset} + k + \
-          //    ( j + ${offset} ) * ( len_z - 2 * (radius - ${offset}) ) + \
-          //    ( i + ${offset} ) * ( len_z - 2 * (radius - ${offset}) ) * ( len_y - 2 * (radius - ${offset})) ] = sum;
-          out[ index ] = sum;
-          //out[ index ] = 1;
+          out[ ${offset} + k + \
+              ( j + ${offset} ) * len_z + \
+              ( i + ${offset} ) * len_z * ( len_y - 2 * radius ) ] = sum;
         }
         
         // This does a 1D convolution across a 3D image (each line is independent)
@@ -683,7 +649,7 @@ class Convolution:
           
           mf = cl.mem_flags
           self.im_2d_offset_buf = cl.Buffer(self.ctx, mf.READ_ONLY | mf.COPY_HOST_PTR, hostbuf=self.im_2d)
-          #print self.im_2d #TEMP
+          
           self.origins_x_buf = cl.Buffer( self.ctx, mf.READ_ONLY | mf.COPY_HOST_PTR, hostbuf=origins[0].astype(int) )
           self.origins_y_buf = cl.Buffer( self.ctx, mf.READ_ONLY | mf.COPY_HOST_PTR, hostbuf=origins[1].astype(int) )
 
