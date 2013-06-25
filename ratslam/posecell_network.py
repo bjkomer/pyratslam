@@ -15,6 +15,9 @@ PC_GLOBAL_INHIB = 0.00002 # value of global inhibition
 PC_CELL_X_SIZE = .2#1
 PC_C_SIZE_TH = 2.0 *pi / PC_DIM_TH
 
+def round_up( x ):
+  return ceil( x ) if x > 0 else floor( x )
+
 class PoseCellNetwork:
 
   def __init__( self, shape, **kwargs ):
@@ -35,7 +38,10 @@ class PoseCellNetwork:
     #self.conv = Convolution( im=self.posecells, fil=self.kernel_1d, sep=True, type=float64 )
     #self.conv = Convolution( im=self.posecells, fil=self.kernel_1d_sep, sep=True, type=float64 )
     self.conv = Convolution( im=self.posecells, fil=self.kernel_3d, sep=False, type=float64 )
-    self.conv.new_filter( self.kernel_2d, dim=2 )
+    
+    filter = self.diff_gaussian_offset_2d( PC_E_SIGMA, PC_I_SIGMA, size=(7,7), origin=(0,0) )
+    #self.conv.new_filter( self.kernel_2d, dim=2 )
+    self.conv.new_filter( filter, dim=2 )
 
   # builds a 3D gaussian filter kernel with lengths of 'dim'
   def build_kernel( self, dim, sigma, order=3 ):
@@ -223,11 +229,11 @@ class PoseCellNetwork:
     dir_pc = arange( self.shape[2] )
     origins = ( ceil( vtrans*cos( (dir_pc - mid)*self.pc_vrot_scale ) ), 
                 ceil( vtrans*sin( (dir_pc - mid)*self.pc_vrot_scale ) ) )
-    print "about to conv in xy" #FIXME: crashes after this line, on second time through, first is fine
+    #origins = ( 0*ceil( vtrans*cos( (dir_pc - mid)*self.pc_vrot_scale ) ), 
+    #            0*ceil( vtrans*sin( (dir_pc - mid)*self.pc_vrot_scale ) ) )
     # PROBABLY DUE TO CEIL FUNCTION NOT WORKING CORRECTLY FOR NEGATIVES, FIX THIS!!!!!
-    self.posecells = self.conv.conv_im( self.posecells, axes=[0,1], radius=ceil( vtrans ), origins=origins )
-    print self.posecells
-    print self.posecells.shape
+    self.posecells = self.conv.conv_im( self.posecells, axes=[0,1], radius=ceil( abs( vtrans ) ), origins=origins )
+    #self.posecells = self.conv.conv_im( self.posecells, axes=[0,1], radius=3, origins=origins )
     """
     for dir_pc in xrange( self.shape[2] ):
       # use a 2D gaussian filter across every theta (direction) layer, with the origin offset based on vtrans and vrot
@@ -264,7 +270,7 @@ class PoseCellNetwork:
     self.conv.new_filter( filter, dim=1 )
     self.posecells = self.conv.conv_im( self.posecells, axes=[2] )
     #self.posecells = ndimage.correlate1d(input=self.posecells, weights=filter.tolist(), axis=2, mode='wrap')
-    
+   
     # Remove any negative values
     self.posecells[self.posecells < 0] = 0
     
@@ -302,9 +308,16 @@ class PoseCellNetwork:
     # Path Integration
     self.path_integration( vtrans, vrot )
     
+    #TEMP TODO REMOVE # 4. Normalization
+    #total = sum(self.posecells.ravel())
+    #if total != 0:
+    #  self.posecells /= total
+    
     # get the maximum pose cell
     self.max_pc = self.get_pc_max()
-
+    #print self.max_pc
+    #print self.posecells[self.max_pc]
+ 
     #print( self.posecells ) #TODO: remove this
 
     return self.max_pc

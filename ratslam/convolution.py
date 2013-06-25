@@ -286,6 +286,66 @@ class Convolution:
           out[ ${offset} + k + ( j + ${offset} ) * ${len_z} + ( i + ${offset} ) * ${len_z} * ${len_y} ] = sum;
         }
         
+        // This does a 2D convolution across a 3D image (each plane is independent)
+        // fil must be 2D and im must be 3D, the filter is offset by the 2D origin value
+        // This function requires len_z and len_y as inputs rather than hardcoded, so it does not need to be
+        // recompiled if they are changed
+        __kernel void conv_xy_origin_variable( __global ${type}* im, __global ${type}* fil, __global ${type}* out,
+                                               __global int* origin_x, __global int* origin_y, 
+                                               int radius, int len_y, int len_z )
+        {
+          unsigned int i = get_global_id(0);
+          unsigned int j = get_global_id(1);
+          unsigned int k = get_global_id(2);
+          ${type} sum = 0;
+          
+          for ( unsigned int x = 0; x < ${filsize}; x++ ) {
+            for ( unsigned int y = 0; y < ${filsize}; y++ ) {
+              //sum += im[ ( ${offset} + k ) + \
+              //           ( ${offset} + origin_y[k] + radius + j + y ${filstart} ) * len_z + \
+              //           ( ${offset} + origin_x[k] + radius + i + x ${filstart} ) * len_z * len_y ] * \
+              //       fil[ y + x * ${filsize} ];
+              int index = ( ${offset} + k ) + \
+                          ( ${offset} + origin_y[k] + radius + j + y ${filstart} ) * len_z + \
+                          ( ${offset} + origin_x[k] + radius + i + x ${filstart} ) * len_z * len_y;
+              int limit = (25 + 2* (radius + ${offset}))*(25 + 2* (radius + ${offset}))*(75 * 2 * ${offset});
+              if ( index >= limit ) {
+                printf("index: %d\\n",index);
+              }
+              sum += im[ index ] * \
+                     fil[ y + x * ${filsize} ];
+            }
+          }
+          //if ( sum > 0 ) {
+          //  printf("the sum is %f\\n",sum);
+          //  printf("index: %d\\n",${offset} + k +( j + ${offset} ) * len_z +( i + ${offset} ) * len_z * len_y);
+          //}
+          //out[ ${offset} + k + \
+          //    ( j + ${offset} ) * ( len_z - 2 * (radius - ${offset}) ) + \
+          //    ( i + ${offset} ) * ( len_z - 2 * (radius - ${offset}) ) * ( len_y - 2 * (radius - ${offset})) ] = sum;
+          //int index = ${offset} + k + \
+          //        ( j + ${offset} ) * ( len_z - 2 * (radius - ${offset}) ) + \
+          //        ( i + ${offset} ) * ( len_z - 2 * (radius - ${offset}) ) * ( len_y - 2 * (radius - ${offset}));
+          //int index = ${offset} + k + \
+          //        ( j + ${offset} ) * ( len_z - 2 * (radius) ) + \
+          //        ( i + ${offset} ) * ( len_z - 2 * (radius) ) * ( len_y - 2 * (radius));
+          //int index = ${offset} + k + \
+          //        ( j + ${offset} ) * ( len_z ) + \
+          //        ( i + ${offset} ) * ( len_z ) * ( len_y );
+          int index =  ${offset} + k + \
+                  ( ${offset} + j ) * ( len_z ) + \
+                  ( ${offset} + i ) * ( len_z ) * ( len_y - 2 * radius);
+          int limit = (25+3)*(25+3)*(75+3);
+          if ( index >= limit ) {
+            printf("out out of limit: %d\\n",index);
+          }
+          //out[ ${offset} + k + \
+          //    ( j + ${offset} ) * ( len_z - 2 * (radius - ${offset}) ) + \
+          //    ( i + ${offset} ) * ( len_z - 2 * (radius - ${offset}) ) * ( len_y - 2 * (radius - ${offset})) ] = sum;
+          out[ index ] = sum;
+          //out[ index ] = 1;
+        }
+        
         // This does a 1D convolution across a 3D image (each line is independent)
         // fil must be 1D and im must be 3D
         __kernel void conv_z(__global ${type}* im, __global ${type}* fil, __global ${type}* out)
@@ -428,9 +488,13 @@ class Convolution:
       elif self.dim == 3:
         if 0 in axes and 1 in axes: # 2D convolution on each xy plane
           if origins: # List of origins for each plane is provided
-            self.program.conv_xy_origin( self.queue, self.im_shape, None, 
+            #self.program.conv_xy_origin( self.queue, self.im_shape, None, 
+            #    self.im_2d_offset_buf, self.fil_2d_buf, self.dest_buf,
+            #    self.origins_x_buf, self.origins_y_buf )
+            self.program.conv_xy_origin_variable( self.queue, self.im_shape, None, 
                 self.im_2d_offset_buf, self.fil_2d_buf, self.dest_buf,
-                self.origins_x_buf, self.origins_y_buf )
+                self.origins_x_buf, self.origins_y_buf, numpy.int32( self.radius ),
+                numpy.int32(self.buf_2d_shape[1]), numpy.int32(self.buf_2d_shape[2]) )
           else:
             self.program.conv_xy( self.queue, self.im_shape, None, self.im_buf, self.fil_2d_buf, self.dest_buf )
           out = numpy.empty_like( self.im )
@@ -602,9 +666,9 @@ class Convolution:
           self.buf_2d_shape = ( self.im_shape[0] + 2 * offset_f, 
                                 self.im_shape[1] + 2 * offset_f, 
                                 self.im_shape[2] + 2 * self.offset ) # The z axis does not need to be larger
-          self.im_2d = numpy.empty( self.buf_2d_shape, dtype=self.type)
+          self.im_2d = numpy.empty( self.buf_2d_shape, dtype=self.type )
 
-          self.im_2d[ offset_f : -offset_f , 
+          self.im_2d[ offset_f : -offset_f, 
                       offset_f : -offset_f, 
                       self.offset : -self.offset ] = im
           
@@ -619,9 +683,9 @@ class Convolution:
           
           mf = cl.mem_flags
           self.im_2d_offset_buf = cl.Buffer(self.ctx, mf.READ_ONLY | mf.COPY_HOST_PTR, hostbuf=self.im_2d)
-          
-          self.origins_x_buf = cl.Buffer(self.ctx, mf.READ_ONLY | mf.COPY_HOST_PTR, hostbuf=origins[0].astype(int) )
-          self.origins_y_buf = cl.Buffer(self.ctx, mf.READ_ONLY | mf.COPY_HOST_PTR, hostbuf=origins[1].astype(int) )
+          #print self.im_2d #TEMP
+          self.origins_x_buf = cl.Buffer( self.ctx, mf.READ_ONLY | mf.COPY_HOST_PTR, hostbuf=origins[0].astype(int) )
+          self.origins_y_buf = cl.Buffer( self.ctx, mf.READ_ONLY | mf.COPY_HOST_PTR, hostbuf=origins[1].astype(int) )
 
 
 
