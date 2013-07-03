@@ -242,12 +242,7 @@ class PoseCellNetwork:
     origins = concatenate( ( around( vtrans*cos( (dir_pc - mid)*self.pc_vrot_scale ) ), 
                              around( vtrans*sin( (dir_pc - mid)*self.pc_vrot_scale ) ) ), axis=0 )
     
-    #origins_exact = ( vtrans*cos( (dir_pc - mid)*self.pc_vrot_scale ), 
-    #                  vtrans*sin( (dir_pc - mid)*self.pc_vrot_scale ) )
-    #origins = ( around( vtrans*cos( (dir_pc - mid)*self.pc_vrot_scale ) ), 
-    #            around( vtrans*sin( (dir_pc - mid)*self.pc_vrot_scale ) ) )
     origins_diff = origins_exact - origins
-    #print origins_diff
     filters = self.filters_from_origins( origins_diff )
     
     self.posecells = self.conv.conv_im( self.posecells, axes=[0,1], radius=ceil( abs( vtrans ) ), 

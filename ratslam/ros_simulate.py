@@ -69,10 +69,6 @@ class RatslamRos():
     self.em = ExperienceMap()
     self.em_count = 0
 
-    pc = self.pcn.posecells
-    pc_index = nonzero(pc>.002)
-    pc_value = pc[pc_index] * 100
-  
   # This is called whenever new visual information is received
   def vis_callback( self, data ):
 
