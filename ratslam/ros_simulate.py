@@ -20,6 +20,7 @@ import cv
 from collections import deque
 
 import cProfile
+import time
 
 # TEMP: testing with smaller things to make it run faster
 #POSE_SIZE = ( 50, 50, 30 )
@@ -96,6 +97,7 @@ class RatslamRos():
     pub_em = rospy.Publisher( 'navbot/experiencemap', Pose2D )
 
     count = 0
+    start_time = time.time()
     #while True:
     while not rospy.is_shutdown():
       #if len(self.twist_data) > 0:
@@ -116,8 +118,10 @@ class RatslamRos():
         pub_pc.publish( self.pc_layout, pc.ravel() )
         pub_em.publish( em_msg )
         count += 1
-      #elif count > 500: #FIXME: temporary break for speed testing
-      #  break
+      elif count > 350: #FIXME: temporary break for speed testing
+        print( "Total Time:" )
+        print( time.time() - start_time )
+        break
 
 def main():
   ratslam = RatslamRos()

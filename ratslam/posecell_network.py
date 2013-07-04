@@ -44,6 +44,20 @@ class PoseCellNetwork:
     #self.conv.new_filter( self.kernel_2d, dim=2 )
     self.conv.new_filter( filter, dim=2 )
 
+    self.filter_dict_2d = self.build_diff_gaussian_set_2d( PC_E_SIGMA, PC_I_SIGMA, shape=(7,7), precision=1 )
+    self.filter_dict_2d_precision = 10 # multiple the decimal by this number to get the right key
+
+  def build_diff_gaussian_set_2d( self, sigma_e, sigma_i, shape=(7,7), precision=1 ):
+    """Builds a set of difference of gaussian kernels with origins within a unit square. 
+       These will be used as a look up table of approximate kernels to improve speed"""
+    dict = {}
+    # larger precision values denote greater precision. Must be integer to prevent floating point errors
+    for x in xrange( -5 * precision, 5 * precision ):
+      for y in xrange( -5 * precision, 5 * precision ):
+        dict[ ( x, y ) ] = self.diff_gaussian_offset_2d( sigma_e, sigma_i, shape=shape, 
+                             origin=( x / ( precision * 10 ), y / ( precision * 10 ) ) )
+    return dict
+
   # builds a 3D gaussian filter kernel with lengths of 'dim'
   def build_kernel( self, dim, sigma, order=3 ):
     if order==3:
@@ -227,6 +241,14 @@ class PoseCellNetwork:
       filters[:,:,z] = self.diff_gaussian_offset_2d( PC_E_SIGMA, PC_I_SIGMA, shape=shape, origin=origins[:,z] )
     return filters
 
+  def filters_from_origins_approx( self, origins, shape=( 7, 7 ) ):
+    num = origins.shape[1]
+    filters = empty( ( shape[0], shape[1], num ) )
+    prec = self.filter_dict_2d_precision
+    for z in xrange(num):
+      filters[:,:,z] = self.filter_dict_2d[ ( int( origins[:,z][0] * prec ), int( origins[:,z][0] * prec ) )  ]
+    return filters
+
   def path_integration( self, vtrans, vrot ):
     vtrans /= self.pc_vtrans_scale
     vrot /= self.pc_vrot_scale #TODO ?? is this right? 
@@ -243,7 +265,10 @@ class PoseCellNetwork:
                              around( vtrans*sin( (dir_pc - mid)*self.pc_vrot_scale ) ) ), axis=0 )
     
     origins_diff = origins_exact - origins
-    filters = self.filters_from_origins( origins_diff )
+    #filters = self.filters_from_origins( origins_diff )
+
+    # Use a lookup table to get the filter set quickly
+    filters = self.filters_from_origins_approx( origins_diff )
     
     self.posecells = self.conv.conv_im( self.posecells, axes=[0,1], radius=ceil( abs( vtrans ) ), 
                                         origins=origins, filters=filters )
