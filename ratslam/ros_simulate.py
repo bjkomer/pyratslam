@@ -2,6 +2,7 @@
 from posecell_network import PoseCellNetwork
 from view_templates import ViewTemplates
 from experience_map import ExperienceMap
+from visual_odometer import SimpleVisualOdometer
 from numpy import *
 from scipy import ndimage, sparse
 import matplotlib.pyplot as plt
@@ -9,9 +10,9 @@ from matplotlib import cm
 from mpl_toolkits.mplot3d import Axes3D
 import pylab
 import rospy
-from geometry_msgs.msg import Twist, TwistWithCovariance, Pose2D
+from geometry_msgs.msg import Pose2D
 from nav_msgs.msg import Odometry
-from std_msgs.msg import Float64MultiArray, MultiArrayLayout, MultiArrayDimension
+from std_msgs.msg import Float64MultiArray, MultiArrayLayout, MultiArrayDimension, Int32
 from rospy.numpy_msg import numpy_msg
 #from sensor_msgs.msg import CompressedImage
 from sensor_msgs.msg import Image #FIXME: test with just Image for now
@@ -21,21 +22,25 @@ from collections import deque
 
 import cProfile
 import time
+import rosbag
+import datetime # For naming rosbag files
 
 # TEMP: testing with smaller things to make it run faster
 #POSE_SIZE = ( 50, 50, 30 )
 #POSE_SIZE = ( 25, 25, 75 )
 POSE_SIZE = ( 21, 21, 36 )
-#IM_SIZE = ( 256, 256 ) #( 512, 512 )
-IM_SIZE = ( 128, 128 ) #( 512, 512 )
+IM_SIZE = ( 256, 256 ) #( 512, 512 )
+#IM_SIZE = ( 128, 128 ) #( 512, 512 )
 #X_RANGE = ( 64, 192 ) #( 128, 384 )
 #Y_RANGE = ( 64, 192 ) #( 128, 384 )
 X_RANGE = ( 32, 96 )
 Y_RANGE = ( 32, 96 )
 X_STEP = 2
 Y_STEP = 2
-MATCH_THRESHOLD = 10 # the smaller the value, the easier it is to make a match
+MATCH_THRESHOLD = 45000 #larger value=easier match#10 # the smaller the value, the easier it is to make a match
 ODOM_FREQ = 10 # Frequency in which odomentry messages are published
+USE_VISUAL_ODOMETRY = False #True
+RECORD_ROSBAG = False # Record the output to a rosbag file
 
 class RatslamRos():
 
@@ -69,6 +74,25 @@ class RatslamRos():
     # Initialize the Experience Map
     self.em = ExperienceMap()
     self.em_count = 0
+    
+    self.vis_odom_data = deque()
+
+    rospy.init_node( 'posecells', anonymous=True )
+    if not USE_VISUAL_ODOMETRY:
+      self.sub_odom = rospy.Subscriber( 'navbot/odom',Odometry,self.odom_callback )
+    self.sub_vis = rospy.Subscriber( 'navbot/camera/image',Image,self.vis_callback )
+    self.pub_pc = rospy.Publisher( 'navbot/posecells', numpy_msg(Float64MultiArray) )
+    self.pub_em = rospy.Publisher( 'navbot/experiencemap', Pose2D )
+    # Set up publisher for the template matches (sends just the index value of a match)
+    self.pub_tm = rospy.Publisher( 'navbot/templatematches', Int32 )
+
+    # Set up a visual odometer
+    self.vis_odom = SimpleVisualOdometer()
+
+    if RECORD_ROSBAG:
+      date = datetime.datetime.now()
+      self.bag = rosbag.Bag( '../testdata/Output-{0}-{1}-{2}-{3}.bag'.format( date.month, date.day, 
+                                                                              date.hour, date.minute ),'w' )
 
   # This is called whenever new visual information is received
   def vis_callback( self, data ):
@@ -78,9 +102,25 @@ class RatslamRos():
 
     pc_max = self.pcn.get_pc_max()
     template_match = self.vts.match( input=im,pc_x=pc_max[0],pc_y=pc_max[1],pc_th=pc_max[2] )
+    index = template_match.get_index()
     #TEMP - just inject with this template for now
-    self.pcn.inject( .02, template_match.location() )
+    #self.pcn.inject( .02, template_match.location() )
+    #self.pcn.inject( .2, template_match.location() )
   
+    # Send the template match index to the viewer
+    index_msg = Int32()
+    index_msg.data = index
+    self.pub_tm.publish( index_msg )
+
+    if RECORD_ROSBAG:
+      self.bag.write( 'navbot/camera/image', data )
+      self.bag.write( 'navbot/templatematches', index_msg )
+
+    # If using visual odometry, update the odometry information using this new image
+    if USE_VISUAL_ODOMETRY:
+      delta = self.vis_odom.update( im )
+      self.vis_odom_data.append( delta )
+
   # This is called whenever new odometry information is received
   def odom_callback( self, data ):
     twist = data.twist.twist
@@ -88,40 +128,46 @@ class RatslamRos():
     if abs(twist.linear.x) > 0.001 or abs(twist.angular.z) > 0.001:
       self.twist_data.append(twist)
 
-  def run( self ):
+    if RECORD_ROSBAG:
+      self.bag.write( 'navbot/odom', data )
 
-    rospy.init_node( 'posecells', anonymous=True )
-    sub_odom = rospy.Subscriber( 'navbot/odom',Odometry,self.odom_callback )
-    sub_vis = rospy.Subscriber( 'navbot/camera/image',Image,self.vis_callback )
-    pub_pc = rospy.Publisher( 'navbot/posecells', numpy_msg(Float64MultiArray) )
-    pub_em = rospy.Publisher( 'navbot/experiencemap', Pose2D )
+  def update_posecells( self, vtrans, vrot ):
+    self.pcn.update( ( vtrans, vrot ) )
+    pc_max = self.pcn.get_pc_max()
+    self.em.update( vtrans, vrot, pc_max )
+
+    #pc = sparse.csr_matrix( self.pcn.posecells ) # Create scipy sparse matrix
+    pc = self.pcn.posecells
+
+    em_msg = Pose2D()
+    em_msg.x, em_msg.y = self.em.get_current_point() # TODO: add theta as well
+    
+    self.pub_pc.publish( self.pc_layout, pc.ravel() )
+    self.pub_em.publish( em_msg )
+
+    if RECORD_ROSBAG:
+      self.bag.write( 'navbot/experiencemap', em_msg )
+      self.bag.write( 'navbot/posecells', numpy_msg(self.pc_layout, pc.ravel()) )
+
+  def run( self ):
 
     count = 0
     start_time = time.time()
-    #while True:
     while not rospy.is_shutdown():
-      #if len(self.twist_data) > 0:
       if self.twist_data:
         twist = self.twist_data.popleft()
         vtrans = twist.linear.x / self.odom_freq
         vrot = twist.angular.z / self.odom_freq
-        self.pcn.update( ( vtrans, vrot ) )
-        pc_max = self.pcn.get_pc_max()
-        self.em.update( vtrans, vrot, pc_max )
-
-        #pc = sparse.csr_matrix( self.pcn.posecells ) # Create scipy sparse matrix
-        pc = self.pcn.posecells
-
-        em_msg = Pose2D()
-        em_msg.x, em_msg.y = self.em.get_current_point() # TODO: add theta as well
-        
-        pub_pc.publish( self.pc_layout, pc.ravel() )
-        pub_em.publish( em_msg )
+        self.update_posecells( vtrans, vrot )
         count += 1
-      elif count > 350: #FIXME: temporary break for speed testing
-        print( "Total Time:" )
-        print( time.time() - start_time )
-        break
+      if self.vis_odom_data:
+        vtrans, vrot = self.vis_odom_data.popleft()
+        self.update_posecells( vtrans, vrot )
+        count += 1
+      #elif count > 350: #FIXME: temporary break for speed testing
+      #  print( "Total Time:" )
+      #  print( time.time() - start_time )
+      #  break
 
 def main():
   ratslam = RatslamRos()

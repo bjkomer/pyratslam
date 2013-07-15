@@ -20,10 +20,10 @@ import cProfile
 POSE_SIZE = ( 21, 21, 36 )
 # Booleans for whether or not certain displays will be shown
 EM_ENABLED = True
-IM_ENABLED = False #True
+IM_ENABLED = True #True
 PC_ENABLED = True
 VT_ENABLED = False
-TM_ENABLED = False
+TM_ENABLED = True
 
 class RatslamViewer( ):
   
@@ -101,7 +101,7 @@ class RatslamViewer( ):
     self.im_data.append( vt )
   
   def tm_callback( self, data ):
-    self.tm_data.append( data ) #FIXME: find the right data type for this and make sure format is correct
+    self.tm_data.append( data.data ) #FIXME: find the right data type for this and make sure format is correct
 
   def run( self ):
     rospy.init_node('ratslam_viewer', anonymous=True)
@@ -147,8 +147,8 @@ class RatslamViewer( ):
         self.vt_im.axes.figure.canvas.draw()
       if self.tm_data:
         tm = self.tm_data.popleft()
-        self.tm_ax.plot( tm_count, tm, 'r')
-        self.em_fig.canvas.draw()
+        self.tm_ax.scatter( tm_count, tm, c='r')
+        self.tm_fig.canvas.draw()
         tm_count += 1
 
 def main():

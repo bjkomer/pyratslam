@@ -3,19 +3,38 @@ from numpy import *
 # A single view template, associated to a particular pose cell
 class ViewTemplate():
 
-  def __init__( self, pc_x, pc_y, pc_th, template ):
+  def __init__( self, pc_x, pc_y, pc_th, index, template ):
     self.pc_x = pc_x
     self.pc_y = pc_y
     self.pc_th = pc_th
     #self.shape = shape
     self.template = template
+    self.index = index
+
+    self.max_offset = 8 # TODO: currently an arbitrary number
 
   def match( self, new_template ):
-    # TODO: fix this, currently super terrible temporary matching method
-    return sum( abs( self.template - new_template ) )
+    
+    # normalize the intensity across each line ?
+
+    # compare at different offsets and take the minimum value
+    mindiff = inf
+    for offset in xrange( -self.max_offset + 1, self.max_offset ):
+      diff = sum( abs( self.template[ self.max_offset + offset : -self.max_offset + offset, : ] - \
+                       new_template[ self.max_offset : -self.max_offset, : ] ) )
+      if diff < mindiff:
+        mindiff = diff
+    #print (mindiff)
+    return mindiff
+
+    ### TODO: fix this, currently super terrible temporary matching method  
+    ###return sum( abs( self.template - new_template ) )
 
   def location( self ):
     return ( self.pc_x, self.pc_y, self.pc_th )
+
+  def get_index( self ):
+    return self.index
 
 # Contains all of the individual templates
 class ViewTemplates():
@@ -40,16 +59,17 @@ class ViewTemplates():
   def __getitem__( self ):
     return self.templates[ index ]
 
-  # Check if a new image matches any templates
+  # Check if a new image matches any templates, and return the best match or a new template
   def match( self, input, pc_x, pc_y, pc_th ):
     template = input[self.mask].reshape(self.shape) # subsample the image
     match_val = [ t.match( template ) for t in self.templates ]
 
     if len( match_val ) == 0 or min( match_val ) > self.match_threshold:
-      new_template = ViewTemplate( pc_x,pc_y,pc_th,template )
+      index = len( self.templates )
+      new_template = ViewTemplate( pc_x, pc_y, pc_th, index, template )
       self.templates.append( new_template )
       return new_template
 
-    best_template = self.templates[ argmin( match_val ) ]
+    best_template = self.templates[ argmin( match_val ) ] # Get the template itself (for viewing purposes)
 
     return best_template
